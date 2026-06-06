@@ -105,9 +105,33 @@
 		);
 	}
 
-	function isHandOnScreen(landmarks: Landmark[], margin = 0.03): boolean {
-		const visibleCount = landmarks.filter((landmark) => isLandmarkOnScreen(landmark, margin)).length;
-		return visibleCount >= 16;
+	function isHandOnScreen(landmarks: Landmark[], margin = 0.08): boolean {
+		const wrist = landmarks[0];
+		return isLandmarkOnScreen(wrist, margin);
+	}
+
+	function computeHandScale(landmarks: Landmark[]): number {
+		let minX = Number.POSITIVE_INFINITY;
+		let maxX = Number.NEGATIVE_INFINITY;
+		let minY = Number.POSITIVE_INFINITY;
+		let maxY = Number.NEGATIVE_INFINITY;
+
+		for (const landmark of landmarks) {
+			if (!landmark) continue;
+			minX = Math.min(minX, landmark.x);
+			maxX = Math.max(maxX, landmark.x);
+			minY = Math.min(minY, landmark.y);
+			maxY = Math.max(maxY, landmark.y);
+		}
+
+		if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+			return 0.06;
+		}
+
+		const width = maxX - minX;
+		const height = maxY - minY;
+		const bboxDiagonal = Math.hypot(width, height);
+		return Math.max(0.06, bboxDiagonal);
 	}
 
 	function computeAverageLandmarkSpeed(
@@ -116,6 +140,7 @@
 		indices: number[],
 		now: number
 	): number {
+		const handScale = computeHandScale(landmarks);
 		let totalSpeed = 0;
 		let count = 0;
 
@@ -128,7 +153,8 @@
 				const dt = (now - previous.t) / 1000;
 				if (dt > 0) {
 					const distance = Math.hypot(landmark.x - previous.x, landmark.y - previous.y);
-					totalSpeed += distance / dt;
+					const normalizedDistance = distance / handScale;
+					totalSpeed += normalizedDistance / dt;
 					count += 1;
 				}
 			}
@@ -140,7 +166,7 @@
 	}
 
 	function computeLeftHandEnergy(landmarks: Landmark[], now: number): number {
-		const speedForMaxEnergy = 2.0;
+		const speedForMaxEnergy = 8.0;
 		const averageSpeed = computeAverageLandmarkSpeed(
 			landmarks,
 			previousLeftHandPoints,
@@ -153,7 +179,7 @@
 	}
 
 	function computeRightHandEnergy(landmarks: Landmark[], now: number): number {
-		const speedForMaxEnergy = 2.0;
+		const speedForMaxEnergy = 8.0;
 		const averageSpeed = computeAverageLandmarkSpeed(
 			landmarks,
 			previousRightHandPoints,
