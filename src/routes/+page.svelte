@@ -15,6 +15,9 @@
 		'RING_MCP', 'RING_PIP', 'RING_DIP', 'RING_TIP',
 		'PINKY_MCP', 'PINKY_PIP', 'PINKY_DIP', 'PINKY_TIP',
 	];
+	const LEFT_HAND_ENERGY_LANDMARKS = LANDMARK_NAMES.map((_, i) => i);
+	// fingertips only: [4, 8, 12, 16, 20]
+	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
 	let stream = $state<MediaStream | null>(null);
 	let error = $state('');
@@ -26,14 +29,17 @@
 	let rafId: number;
 
 	type Landmark = { x: number; y: number; z: number };
+	type PreviousPoint = { x: number; y: number; t: number };
 	let handData = $state<Landmark[][]>([]);
 	let lastDataUpdate = 0;
 
 	// pose detection state (used for slider + note gate logic)
 	let leftHandY = $state(0.5);
 	let leftHandActive = $state(false);
+	let leftHandEnergy = $state(0);
 	let rightHandY = $state(0.5);
 	let rightHandActive = $state(false);
+	let previousLeftHandPoints = new Map<number, PreviousPoint>();
 
 	let rightArmRaised = $state(false);
 	let prevRightArmRaised = false;
@@ -56,6 +62,7 @@
 		{ name: 'Right Hand Y', type: 'cc',   number: 2,  value: 0     },
 		{ name: 'Left Arm',     type: 'note', number: 61, value: false },
 		{ name: 'Right Arm',    type: 'note', number: 60, value: false },
+		{ name: 'Left Hand Energy', type: 'cc', number: 3, value: 0 },
 	]);
 
 	async function initMidi() {
@@ -84,6 +91,52 @@
 	function sendNote(mapping: NoteMapping, on: boolean) {
 		if (!midiOutput) return;
 		midiOutput.send([(on ? 0x90 : 0x80) | (midiChannel - 1), mapping.number, on ? 100 : 0]);
+	}
+
+	function clamp01(value: number): number {
+		return Math.max(0, Math.min(1, value));
+	}
+
+	function computeAverageLandmarkSpeed(
+		landmarks: Landmark[],
+		previousPoints: Map<number, PreviousPoint>,
+		indices: number[],
+		now: number
+	): number {
+		let totalSpeed = 0;
+		let count = 0;
+
+		for (const index of indices) {
+			const landmark = landmarks[index];
+			if (!landmark) continue;
+
+			const previous = previousPoints.get(index);
+			if (previous) {
+				const dt = (now - previous.t) / 1000;
+				if (dt > 0) {
+					const distance = Math.hypot(landmark.x - previous.x, landmark.y - previous.y);
+					totalSpeed += distance / dt;
+					count += 1;
+				}
+			}
+
+			previousPoints.set(index, { x: landmark.x, y: landmark.y, t: now });
+		}
+
+		return count > 0 ? totalSpeed / count : 0;
+	}
+
+	function computeLeftHandEnergy(landmarks: Landmark[], now: number): number {
+		const speedForMaxEnergy = 2.5;
+		const averageSpeed = computeAverageLandmarkSpeed(
+			landmarks,
+			previousLeftHandPoints,
+			LEFT_HAND_ENERGY_LANDMARKS,
+			now
+		);
+		const rawEnergy = clamp01(averageSpeed / speedForMaxEnergy);
+		leftHandEnergy = leftHandEnergy * 0.8 + rawEnergy * 0.2;
+		return leftHandEnergy;
 	}
 
 	async function initDetectors() {
@@ -206,8 +259,12 @@
 					leftHandY = landmarks[0].y;
 					leftHandActive = true;
 					midiMappings[0].value = leftHandY;
+					const energy = computeLeftHandEnergy(landmarks, now);
+					const leftHandEnergyMapping = midiMappings[4];
+					leftHandEnergyMapping.value = energy;
 					if (now - lastMidiSend > 33) {
 						sendCC(midiMappings[0] as CcMapping, leftHandY);
+						sendCC(leftHandEnergyMapping as CcMapping, energy);
 					}
 				} else if (handedness === 'Right') {
 					rightHandY = landmarks[0].y;
@@ -218,6 +275,12 @@
 					}
 				}
 				if (now - lastMidiSend > 33) lastMidiSend = now;
+			}
+
+			if (!leftHandActive) {
+				previousLeftHandPoints.clear();
+				leftHandEnergy = leftHandEnergy * 0.9;
+				midiMappings[4].value = leftHandEnergy;
 			}
 
 			if (now - lastDataUpdate > 100) {
@@ -237,6 +300,8 @@
 		handData = [];
 		leftHandActive = false;
 		rightHandActive = false;
+		previousLeftHandPoints.clear();
+		leftHandEnergy = 0;
 		if (rightArmRaised) sendNote(midiMappings[3] as NoteMapping, false);
 		if (leftArmRaised) sendNote(midiMappings[2] as NoteMapping, false);
 		rightArmRaised = false;
@@ -247,6 +312,7 @@
 		midiMappings[1].value = 0;
 		midiMappings[2].value = false;
 		midiMappings[3].value = false;
+		midiMappings[4].value = 0;
 		if (videoEl) videoEl.srcObject = null;
 		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
 	}
