@@ -1,5 +1,14 @@
 <script lang="ts">
 	import { FilesetResolver, HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
+	import {
+		clamp01,
+		computeFootPoint,
+		computeRelativeFootX,
+		computeRelativeFootY,
+		computeRelativeHandX,
+		computeRelativeHandY,
+		type Landmark
+	} from '$lib/body-relative';
 	import PeerModal from '$lib/PeerModal.svelte';
 
 	const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
@@ -11,6 +20,12 @@
 	const LEFT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	const RIGHT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	const POSE_WRIST_ENERGY_LANDMARKS = [0];
+	const LEFT_ANKLE = 27;
+	const RIGHT_ANKLE = 28;
+	const LEFT_HEEL = 29;
+	const RIGHT_HEEL = 30;
+	const LEFT_FOOT_INDEX = 31;
+	const RIGHT_FOOT_INDEX = 32;
 	// fingertips only: [4, 8, 12, 16, 20]
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
@@ -27,7 +42,6 @@
 	let handLandmarker: HandLandmarker | undefined;
 	let rafId: number;
 
-	type Landmark = { x: number; y: number; z: number };
 	type PreviousPoint = { x: number; y: number; t: number };
 	// pose detection state (used for slider + note gate logic)
 	let leftHandY = $state(0.5);
@@ -58,12 +72,18 @@
 	type MidiMapping = CcMapping | NoteMapping;
 
 	let midiMappings = $state<MidiMapping[]>([
-		{ name: 'Left Hand Y',  type: 'cc',   number: 1,  value: 0     },
-		{ name: 'Right Hand Y', type: 'cc',   number: 2,  value: 0     },
-		{ name: 'Left Arm',     type: 'note', number: 61, value: false },
-		{ name: 'Right Arm',    type: 'note', number: 60, value: false },
-		{ name: 'Left Hand Energy', type: 'cc', number: 3, value: 0 },
-		{ name: 'Right Hand Energy', type: 'cc', number: 4, value: 0 },
+		{ name: 'Left Hand X', type: 'cc', number: 1, value: 0 },
+		{ name: 'Left Hand Y',  type: 'cc',   number: 2,  value: 0 },
+		{ name: 'Right Hand X', type: 'cc', number: 3, value: 0 },
+		{ name: 'Right Hand Y', type: 'cc',   number: 4,  value: 0 },
+		{ name: 'Left Foot X', type: 'cc', number: 5, value: 0 },
+		{ name: 'Left Foot Y', type: 'cc', number: 6, value: 0 },
+		{ name: 'Right Foot X', type: 'cc', number: 7, value: 0 },
+		{ name: 'Right Foot Y', type: 'cc', number: 8, value: 0 },
+		{ name: 'Left Hand Energy', type: 'cc', number: 9, value: 0 },
+		{ name: 'Right Hand Energy', type: 'cc', number: 10, value: 0 },
+		{ name: 'Left Arm', type: 'note', number: 61, value: false },
+		{ name: 'Right Arm', type: 'note', number: 60, value: false },
 	]);
 
 	async function initMidi() {
@@ -92,10 +112,6 @@
 	function sendNote(mapping: NoteMapping, on: boolean) {
 		if (!midiOutput) return;
 		midiOutput.send([(on ? 0x90 : 0x80) | (midiChannel - 1), mapping.number, on ? 100 : 0]);
-	}
-
-	function clamp01(value: number): number {
-		return Math.max(0, Math.min(1, value));
 	}
 
 	function isLandmarkOnScreen(landmark: Landmark | undefined, margin = 0): boolean {
@@ -239,68 +255,6 @@
 		return rightHandEnergy;
 	}
 
-	function averageLandmarks(points: Array<Landmark | undefined>): Landmark | undefined {
-		let sumX = 0;
-		let sumY = 0;
-		let sumZ = 0;
-		let count = 0;
-
-		for (const point of points) {
-			if (!point) continue;
-			sumX += point.x;
-			sumY += point.y;
-			sumZ += point.z;
-			count += 1;
-		}
-
-		if (count === 0) return undefined;
-
-		return {
-			x: sumX / count,
-			y: sumY / count,
-			z: sumZ / count
-		};
-	}
-
-	function computeBodyReference(poseLandmarks: Landmark[]) {
-		const shoulderCenter = averageLandmarks([poseLandmarks[11], poseLandmarks[12]]);
-		const hipCenter = averageLandmarks([poseLandmarks[23], poseLandmarks[24]]);
-
-		if (!shoulderCenter || !hipCenter) return undefined;
-
-		const ankleCenter = averageLandmarks([poseLandmarks[27], poseLandmarks[28]]);
-		const torsoHeight = Math.abs(hipCenter.y - shoulderCenter.y);
-		const bodyHeight = ankleCenter
-			? Math.abs(ankleCenter.y - shoulderCenter.y)
-			: torsoHeight;
-
-		return {
-			shoulderCenter,
-			hipCenter,
-			ankleCenter,
-			torsoHeight,
-			bodyHeight
-		};
-	}
-
-	function computeRelativeVerticalPosition(point: Landmark, topY: number, bottomY: number): number {
-		return clamp01((bottomY - point.y) / Math.max(0.001, bottomY - topY));
-	}
-
-	function computeRelativeHandY(wrist: Landmark, poseLandmarks: Landmark[]): number {
-		const bodyReference = computeBodyReference(poseLandmarks);
-		if (!bodyReference) return clamp01(wrist.y);
-
-		const upperExtension = bodyReference.torsoHeight * 0.75;
-		const extendedTopY = bodyReference.shoulderCenter.y - upperExtension;
-
-		return computeRelativeVerticalPosition(
-			wrist,
-			extendedTopY,
-			bodyReference.hipCenter.y
-		);
-	}
-
 	async function initDetectors() {
 		if (poseLandmarker && handLandmarker) return;
 		status = 'Loading models...';
@@ -343,6 +297,12 @@
 		midiMappings[3].value = false;
 		midiMappings[4].value = 0;
 		midiMappings[5].value = 0;
+		midiMappings[6].value = 0;
+		midiMappings[7].value = 0;
+		midiMappings[8].value = 0;
+		midiMappings[9].value = 0;
+		midiMappings[10].value = 0;
+		midiMappings[11].value = 0;
 		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
 	}
 
@@ -484,6 +444,16 @@
 				currentPoseLandmarks = landmarks;
 				drawConnections(ctx, landmarks, PoseLandmarker.POSE_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 3, w, h);
+				const leftFootLandmarks = [
+					landmarks[LEFT_ANKLE],
+					landmarks[LEFT_HEEL],
+					landmarks[LEFT_FOOT_INDEX]
+				];
+				const rightFootLandmarks = [
+					landmarks[RIGHT_ANKLE],
+					landmarks[RIGHT_HEEL],
+					landmarks[RIGHT_FOOT_INDEX]
+				];
 				leftPoseWrist = landmarks[15];
 				rightPoseWrist = landmarks[16];
 				poseScale = computePoseScale(landmarks);
@@ -503,6 +473,44 @@
 					sendNote(midiMappings[2] as NoteMapping, lRaised);
 					prevLeftArmRaised = lRaised;
 				}
+
+				const leftFoot = leftFootLandmarks.some(Boolean) ? computeFootPoint(landmarks, 'left') : undefined;
+				const rightFoot = rightFootLandmarks.some(Boolean)
+					? computeFootPoint(landmarks, 'right')
+					: undefined;
+				const leftFootOnScreen = isLandmarkOnScreen(leftFoot, 0.08);
+				const rightFootOnScreen = isLandmarkOnScreen(rightFoot, 0.08);
+
+				midiMappings[8].value =
+					leftFoot && leftFootOnScreen ? computeRelativeFootX(leftFoot, landmarks) : 0;
+				midiMappings[9].value =
+					leftFoot && leftFootOnScreen ? computeRelativeFootY(leftFoot, landmarks) : 0;
+				midiMappings[10].value =
+					rightFoot && rightFootOnScreen ? computeRelativeFootX(rightFoot, landmarks) : 0;
+				midiMappings[11].value =
+					rightFoot && rightFootOnScreen ? computeRelativeFootY(rightFoot, landmarks) : 0;
+
+				if (shouldSendMidi) {
+					sendCC(midiMappings[8] as CcMapping, midiMappings[8].value);
+					sendCC(midiMappings[9] as CcMapping, midiMappings[9].value);
+					sendCC(midiMappings[10] as CcMapping, midiMappings[10].value);
+					sendCC(midiMappings[11] as CcMapping, midiMappings[11].value);
+					sentMidiThisFrame = true;
+				}
+			}
+
+			if (!currentPoseLandmarks) {
+				midiMappings[8].value = 0;
+				midiMappings[9].value = 0;
+				midiMappings[10].value = 0;
+				midiMappings[11].value = 0;
+				if (shouldSendMidi) {
+					sendCC(midiMappings[8] as CcMapping, 0);
+					sendCC(midiMappings[9] as CcMapping, 0);
+					sendCC(midiMappings[10] as CcMapping, 0);
+					sendCC(midiMappings[11] as CcMapping, 0);
+					sentMidiThisFrame = true;
+				}
 			}
 
 			const hands = handLandmarker.detectForVideo(videoEl, now);
@@ -519,9 +527,13 @@
 					leftHandY = currentPoseLandmarks
 						? computeRelativeHandY(landmarks[0], currentPoseLandmarks)
 						: clamp01(landmarks[0].y);
+					const leftHandX = currentPoseLandmarks
+						? computeRelativeHandX(landmarks[0], currentPoseLandmarks)
+						: clamp01(landmarks[0].x);
 					leftHandActive = true;
 					previousLeftPoseWristPoints.clear();
 					midiMappings[0].value = leftHandY;
+					midiMappings[6].value = leftHandX;
 					const leftHandEnergyMapping = midiMappings[4];
 					const onScreen = isHandOnScreen(landmarks);
 					if (!onScreen) {
@@ -530,6 +542,7 @@
 						leftHandEnergyMapping.value = 0;
 						if (shouldSendMidi) {
 							sendCC(midiMappings[0] as CcMapping, leftHandY);
+							sendCC(midiMappings[6] as CcMapping, leftHandX);
 							sendCC(leftHandEnergyMapping as CcMapping, 0);
 							sentMidiThisFrame = true;
 						}
@@ -539,6 +552,7 @@
 					leftHandEnergyMapping.value = energy;
 					if (shouldSendMidi) {
 						sendCC(midiMappings[0] as CcMapping, leftHandY);
+						sendCC(midiMappings[6] as CcMapping, leftHandX);
 						sendCC(leftHandEnergyMapping as CcMapping, energy);
 						sentMidiThisFrame = true;
 					}
@@ -546,9 +560,13 @@
 					rightHandY = currentPoseLandmarks
 						? computeRelativeHandY(landmarks[0], currentPoseLandmarks)
 						: clamp01(landmarks[0].y);
+					const rightHandX = currentPoseLandmarks
+						? computeRelativeHandX(landmarks[0], currentPoseLandmarks)
+						: clamp01(landmarks[0].x);
 					rightHandActive = true;
 					previousRightPoseWristPoints.clear();
 					midiMappings[1].value = rightHandY;
+					midiMappings[7].value = rightHandX;
 					const rightHandEnergyMapping = midiMappings[5];
 					const onScreen = isHandOnScreen(landmarks);
 					if (!onScreen) {
@@ -557,6 +575,7 @@
 						rightHandEnergyMapping.value = 0;
 						if (shouldSendMidi) {
 							sendCC(midiMappings[1] as CcMapping, rightHandY);
+							sendCC(midiMappings[7] as CcMapping, rightHandX);
 							sendCC(rightHandEnergyMapping as CcMapping, 0);
 							sentMidiThisFrame = true;
 						}
@@ -566,6 +585,7 @@
 					rightHandEnergyMapping.value = energy;
 					if (shouldSendMidi) {
 						sendCC(midiMappings[1] as CcMapping, rightHandY);
+						sendCC(midiMappings[7] as CcMapping, rightHandX);
 						sendCC(rightHandEnergyMapping as CcMapping, energy);
 						sentMidiThisFrame = true;
 					}
@@ -579,11 +599,16 @@
 					leftHandY = currentPoseLandmarks
 						? computeRelativeHandY(leftPoseWrist, currentPoseLandmarks)
 						: clamp01(leftPoseWrist.y);
+					const leftHandX = currentPoseLandmarks
+						? computeRelativeHandX(leftPoseWrist, currentPoseLandmarks)
+						: clamp01(leftPoseWrist.x);
 					midiMappings[0].value = leftHandY;
+					midiMappings[6].value = leftHandX;
 					const energy = computeLeftPoseWristEnergy(leftPoseWrist, poseScale, now);
 					midiMappings[4].value = energy;
 					if (shouldSendMidi) {
 						sendCC(midiMappings[0] as CcMapping, leftHandY);
+						sendCC(midiMappings[6] as CcMapping, leftHandX);
 						sendCC(midiMappings[4] as CcMapping, energy);
 						sentMidiThisFrame = true;
 					}
@@ -605,11 +630,16 @@
 					rightHandY = currentPoseLandmarks
 						? computeRelativeHandY(rightPoseWrist, currentPoseLandmarks)
 						: clamp01(rightPoseWrist.y);
+					const rightHandX = currentPoseLandmarks
+						? computeRelativeHandX(rightPoseWrist, currentPoseLandmarks)
+						: clamp01(rightPoseWrist.x);
 					midiMappings[1].value = rightHandY;
+					midiMappings[7].value = rightHandX;
 					const energy = computeRightPoseWristEnergy(rightPoseWrist, poseScale, now);
 					midiMappings[5].value = energy;
 					if (shouldSendMidi) {
 						sendCC(midiMappings[1] as CcMapping, rightHandY);
+						sendCC(midiMappings[7] as CcMapping, rightHandX);
 						sendCC(midiMappings[5] as CcMapping, energy);
 						sentMidiThisFrame = true;
 					}
