@@ -10,6 +10,7 @@
 
 	const LEFT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	const RIGHT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
+	const POSE_WRIST_ENERGY_LANDMARKS = [0];
 	// fingertips only: [4, 8, 12, 16, 20]
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
@@ -37,6 +38,8 @@
 	let rightHandEnergy = $state(0);
 	let previousLeftHandPoints = new Map<number, PreviousPoint>();
 	let previousRightHandPoints = new Map<number, PreviousPoint>();
+	let previousLeftPoseWristPoints = new Map<number, PreviousPoint>();
+	let previousRightPoseWristPoints = new Map<number, PreviousPoint>();
 
 	let rightArmRaised = $state(false);
 	let prevRightArmRaised = false;
@@ -138,9 +141,10 @@
 		landmarks: Landmark[],
 		previousPoints: Map<number, PreviousPoint>,
 		indices: number[],
-		now: number
+		now: number,
+		scaleOverride?: number
 	): number {
-		const handScale = computeHandScale(landmarks);
+		const handScale = scaleOverride ?? computeHandScale(landmarks);
 		let totalSpeed = 0;
 		let count = 0;
 
@@ -165,6 +169,11 @@
 		return count > 0 ? totalSpeed / count : 0;
 	}
 
+	function smoothEnergy(currentEnergy: number, averageSpeed: number, speedForMaxEnergy: number): number {
+		const rawEnergy = clamp01(averageSpeed / speedForMaxEnergy);
+		return currentEnergy * 0.8 + rawEnergy * 0.2;
+	}
+
 	function computeLeftHandEnergy(landmarks: Landmark[], now: number): number {
 		const speedForMaxEnergy = 8.0;
 		const averageSpeed = computeAverageLandmarkSpeed(
@@ -173,8 +182,7 @@
 			LEFT_HAND_ENERGY_LANDMARKS,
 			now
 		);
-		const rawEnergy = clamp01(averageSpeed / speedForMaxEnergy);
-		leftHandEnergy = leftHandEnergy * 0.8 + rawEnergy * 0.2;
+		leftHandEnergy = smoothEnergy(leftHandEnergy, averageSpeed, speedForMaxEnergy);
 		return leftHandEnergy;
 	}
 
@@ -186,8 +194,48 @@
 			RIGHT_HAND_ENERGY_LANDMARKS,
 			now
 		);
-		const rawEnergy = clamp01(averageSpeed / speedForMaxEnergy);
-		rightHandEnergy = rightHandEnergy * 0.8 + rawEnergy * 0.2;
+		rightHandEnergy = smoothEnergy(rightHandEnergy, averageSpeed, speedForMaxEnergy);
+		return rightHandEnergy;
+	}
+
+	function distance2d(a: Landmark | undefined, b: Landmark | undefined): number {
+		if (!a || !b) return 0;
+		return Math.hypot(a.x - b.x, a.y - b.y);
+	}
+
+	function computePoseScale(poseLandmarks: Landmark[]): number {
+		const shoulderWidth = distance2d(poseLandmarks[11], poseLandmarks[12]);
+		const leftTorsoHeight = distance2d(poseLandmarks[11], poseLandmarks[23]);
+		const rightTorsoHeight = distance2d(poseLandmarks[12], poseLandmarks[24]);
+		const scales = [shoulderWidth, leftTorsoHeight, rightTorsoHeight].filter((value) => value > 0);
+		const averageScale =
+			scales.length > 0 ? scales.reduce((sum, value) => sum + value, 0) / scales.length : 0.08;
+		return Math.max(0.08, averageScale);
+	}
+
+	function computeLeftPoseWristEnergy(wrist: Landmark, poseScale: number, now: number): number {
+		const speedForMaxEnergy = 8.0;
+		const averageSpeed = computeAverageLandmarkSpeed(
+			[wrist],
+			previousLeftPoseWristPoints,
+			POSE_WRIST_ENERGY_LANDMARKS,
+			now,
+			poseScale
+		);
+		leftHandEnergy = smoothEnergy(leftHandEnergy, averageSpeed, speedForMaxEnergy);
+		return leftHandEnergy;
+	}
+
+	function computeRightPoseWristEnergy(wrist: Landmark, poseScale: number, now: number): number {
+		const speedForMaxEnergy = 8.0;
+		const averageSpeed = computeAverageLandmarkSpeed(
+			[wrist],
+			previousRightPoseWristPoints,
+			POSE_WRIST_ENERGY_LANDMARKS,
+			now,
+			poseScale
+		);
+		rightHandEnergy = smoothEnergy(rightHandEnergy, averageSpeed, speedForMaxEnergy);
 		return rightHandEnergy;
 	}
 
@@ -215,6 +263,8 @@
 		rightHandActive = false;
 		previousLeftHandPoints.clear();
 		previousRightHandPoints.clear();
+		previousLeftPoseWristPoints.clear();
+		previousRightPoseWristPoints.clear();
 		if (rightArmRaised) sendNote(midiMappings[3] as NoteMapping, false);
 		if (leftArmRaised) sendNote(midiMappings[2] as NoteMapping, false);
 		rightArmRaised = false;
@@ -360,6 +410,9 @@
 			const now = performance.now();
 			const shouldSendMidi = now - lastMidiSend > 33;
 			let sentMidiThisFrame = false;
+			let leftPoseWrist: Landmark | undefined;
+			let rightPoseWrist: Landmark | undefined;
+			let poseScale = 0.08;
 
 			const pose = poseLandmarker.detectForVideo(videoEl, now);
 			ctx.strokeStyle = 'rgba(255,255,255,0.45)';
@@ -367,6 +420,9 @@
 			for (const landmarks of pose.landmarks) {
 				drawConnections(ctx, landmarks, PoseLandmarker.POSE_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 3, w, h);
+				leftPoseWrist = landmarks[15];
+				rightPoseWrist = landmarks[16];
+				poseScale = computePoseScale(landmarks);
 
 				const rRaised = landmarks[16].y < landmarks[12].y;
 				rightArmRaised = rRaised;
@@ -398,6 +454,7 @@
 				if (handedness === 'Left') {
 					leftHandY = landmarks[0].y;
 					leftHandActive = true;
+					previousLeftPoseWristPoints.clear();
 					midiMappings[0].value = leftHandY;
 					const leftHandEnergyMapping = midiMappings[4];
 					const onScreen = isHandOnScreen(landmarks);
@@ -422,6 +479,7 @@
 				} else if (handedness === 'Right') {
 					rightHandY = landmarks[0].y;
 					rightHandActive = true;
+					previousRightPoseWristPoints.clear();
 					midiMappings[1].value = rightHandY;
 					const rightHandEnergyMapping = midiMappings[5];
 					const onScreen = isHandOnScreen(landmarks);
@@ -448,21 +506,43 @@
 
 			if (!leftHandActive) {
 				previousLeftHandPoints.clear();
-				leftHandEnergy = 0;
-				midiMappings[4].value = 0;
-				if (shouldSendMidi) {
-					sendCC(midiMappings[4] as CcMapping, 0);
-					sentMidiThisFrame = true;
+				const leftPoseWristOnScreen = isLandmarkOnScreen(leftPoseWrist, 0.08);
+				if (leftPoseWrist && leftPoseWristOnScreen) {
+					const energy = computeLeftPoseWristEnergy(leftPoseWrist, poseScale, now);
+					midiMappings[4].value = energy;
+					if (shouldSendMidi) {
+						sendCC(midiMappings[4] as CcMapping, energy);
+						sentMidiThisFrame = true;
+					}
+				} else {
+					previousLeftPoseWristPoints.clear();
+					leftHandEnergy = 0;
+					midiMappings[4].value = 0;
+					if (shouldSendMidi) {
+						sendCC(midiMappings[4] as CcMapping, 0);
+						sentMidiThisFrame = true;
+					}
 				}
 			}
 
 			if (!rightHandActive) {
 				previousRightHandPoints.clear();
-				rightHandEnergy = 0;
-				midiMappings[5].value = 0;
-				if (shouldSendMidi) {
-					sendCC(midiMappings[5] as CcMapping, 0);
-					sentMidiThisFrame = true;
+				const rightPoseWristOnScreen = isLandmarkOnScreen(rightPoseWrist, 0.08);
+				if (rightPoseWrist && rightPoseWristOnScreen) {
+					const energy = computeRightPoseWristEnergy(rightPoseWrist, poseScale, now);
+					midiMappings[5].value = energy;
+					if (shouldSendMidi) {
+						sendCC(midiMappings[5] as CcMapping, energy);
+						sentMidiThisFrame = true;
+					}
+				} else {
+					previousRightPoseWristPoints.clear();
+					rightHandEnergy = 0;
+					midiMappings[5].value = 0;
+					if (shouldSendMidi) {
+						sendCC(midiMappings[5] as CcMapping, 0);
+						sentMidiThisFrame = true;
+					}
 				}
 			}
 
