@@ -29,14 +29,34 @@
 	let handData = $state<Landmark[][]>([]);
 	let lastDataUpdate = 0;
 
+	// pose detection state (used for slider + note gate logic)
 	let leftHandY = $state(0.5);
 	let leftHandActive = $state(false);
+	let rightHandY = $state(0.5);
+	let rightHandActive = $state(false);
 
+	let rightArmRaised = $state(false);
+	let prevRightArmRaised = false;
+	let leftArmRaised = $state(false);
+	let prevLeftArmRaised = false;
+
+	// MIDI device
 	let midiOutputs = $state<MIDIOutput[]>([]);
 	let midiOutput = $state<MIDIOutput | null>(null);
-	let midiCC = $state(1);
-	let midiChannel = $state(1);
+	let midiChannel = $state(10);
 	let lastMidiSend = 0;
+
+	// MIDI mappings — each entry owns its type, target number, and live value
+	type CcMapping   = { name: string; type: 'cc';   number: number; value: number };
+	type NoteMapping = { name: string; type: 'note'; number: number; value: boolean };
+	type MidiMapping = CcMapping | NoteMapping;
+
+	let midiMappings = $state<MidiMapping[]>([
+		{ name: 'Left Hand Y',  type: 'cc',   number: 1,  value: 0     },
+		{ name: 'Right Hand Y', type: 'cc',   number: 2,  value: 0     },
+		{ name: 'Left Arm',     type: 'note', number: 61, value: false },
+		{ name: 'Right Arm',    type: 'note', number: 60, value: false },
+	]);
 
 	async function initMidi() {
 		try {
@@ -52,9 +72,18 @@
 		}
 	}
 
-	function sendCC(value: number) {
+	function sendCC(mapping: CcMapping, raw: number) {
 		if (!midiOutput) return;
-		midiOutput.send([0xb0 | (midiChannel - 1), midiCC, Math.max(0, Math.min(127, Math.round(value * 127)))]);
+		midiOutput.send([
+			0xb0 | (midiChannel - 1),
+			mapping.number,
+			Math.max(0, Math.min(127, Math.round(raw * 127)))
+		]);
+	}
+
+	function sendNote(mapping: NoteMapping, on: boolean) {
+		if (!midiOutput) return;
+		midiOutput.send([(on ? 0x90 : 0x80) | (midiChannel - 1), mapping.number, on ? 100 : 0]);
 	}
 
 	async function initDetectors() {
@@ -146,6 +175,22 @@
 			for (const landmarks of pose.landmarks) {
 				drawConnections(ctx, landmarks, PoseLandmarker.POSE_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 3, w, h);
+
+				const rRaised = landmarks[16].y < landmarks[12].y;
+				rightArmRaised = rRaised;
+				midiMappings[3].value = rRaised;
+				if (rRaised !== prevRightArmRaised) {
+					sendNote(midiMappings[3] as NoteMapping, rRaised);
+					prevRightArmRaised = rRaised;
+				}
+
+				const lRaised = landmarks[15].y < landmarks[11].y;
+				leftArmRaised = lRaised;
+				midiMappings[2].value = lRaised;
+				if (lRaised !== prevLeftArmRaised) {
+					sendNote(midiMappings[2] as NoteMapping, lRaised);
+					prevLeftArmRaised = lRaised;
+				}
 			}
 
 			const hands = handLandmarker.detectForVideo(videoEl, now);
@@ -156,17 +201,25 @@
 				const landmarks = hands.landmarks[i];
 				drawConnections(ctx, landmarks, HandLandmarker.HAND_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 2.5, w, h);
-				if (hands.handednesses[i]?.[0]?.categoryName === 'Left') {
-					leftHandY = landmarks[0].y; // wrist
+				const handedness = hands.handednesses[i]?.[0]?.categoryName;
+				if (handedness === 'Left') {
+					leftHandY = landmarks[0].y;
 					leftHandActive = true;
+					midiMappings[0].value = leftHandY;
 					if (now - lastMidiSend > 33) {
-						sendCC(leftHandY);
-						lastMidiSend = now;
+						sendCC(midiMappings[0] as CcMapping, leftHandY);
+					}
+				} else if (handedness === 'Right') {
+					rightHandY = landmarks[0].y;
+					rightHandActive = true;
+					midiMappings[1].value = rightHandY;
+					if (now - lastMidiSend > 33) {
+						sendCC(midiMappings[1] as CcMapping, rightHandY);
 					}
 				}
+				if (now - lastMidiSend > 33) lastMidiSend = now;
 			}
 
-			// throttle panel updates to ~10fps to avoid thrashing Svelte reactivity
 			if (now - lastDataUpdate > 100) {
 				handData = hands.landmarks as Landmark[][];
 				lastDataUpdate = now;
@@ -183,6 +236,17 @@
 		status = '';
 		handData = [];
 		leftHandActive = false;
+		rightHandActive = false;
+		if (rightArmRaised) sendNote(midiMappings[3] as NoteMapping, false);
+		if (leftArmRaised) sendNote(midiMappings[2] as NoteMapping, false);
+		rightArmRaised = false;
+		prevRightArmRaised = false;
+		leftArmRaised = false;
+		prevLeftArmRaised = false;
+		midiMappings[0].value = 0;
+		midiMappings[1].value = 0;
+		midiMappings[2].value = false;
+		midiMappings[3].value = false;
 		if (videoEl) videoEl.srcObject = null;
 		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
 	}
@@ -213,7 +277,7 @@
 			<div class="relative w-4 border border-zinc-800">
 				<div class="absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 bg-zinc-800"></div>
 				<div
-					class="absolute left-0 right-0 h-px transition-none {leftHandActive ? 'bg-white' : 'bg-zinc-700'}"
+					class="absolute left-0 right-0 h-px {leftHandActive ? 'bg-white' : 'bg-zinc-700'}"
 					style="top: {(leftHandY * 100).toFixed(2)}%"
 				></div>
 			</div>
@@ -227,6 +291,7 @@
 		</button>
 
 		{#if stream}
+			<!-- MIDI device controls -->
 			<div class="flex items-center gap-3">
 				<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">MIDI Out</span>
 				{#if midiOutputs.length > 0}
@@ -249,17 +314,43 @@
 						max="16"
 						class="w-16 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1 text-center"
 					/>
-					<span class="font-mono text-[10px] text-zinc-600">CC</span>
-					<input
-						type="number"
-						bind:value={midiCC}
-						min="0"
-						max="127"
-						class="w-16 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1 text-center"
-					/>
 				{:else}
 					<span class="font-mono text-[10px] text-zinc-700">No MIDI outputs</span>
 				{/if}
+			</div>
+
+			<!-- mappings grid -->
+			<div class="w-full max-w-2xl">
+				<div class="grid grid-cols-[1fr_auto_auto] gap-x-6 gap-y-1">
+					<!-- header -->
+					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">Name</span>
+					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">MIDI</span>
+					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase text-right">Value</span>
+
+					<!-- rows -->
+					{#each midiMappings as m}
+						<span class="font-mono text-[10px] text-zinc-400">{m.name}</span>
+						<div class="flex items-center gap-1">
+							<span class="font-mono text-[10px] text-zinc-500">{m.type === 'cc' ? 'CC' : 'N'}</span>
+							<input
+								type="number"
+								bind:value={m.number}
+								min="0"
+								max="127"
+								class="w-12 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-1 py-0.5 text-center"
+							/>
+						</div>
+						{#if m.type === 'cc'}
+							<span class="font-mono text-[10px] tabular-nums text-zinc-300 text-right">
+								{(m.value as number).toFixed(3)}
+							</span>
+						{:else}
+							<span class="font-mono text-[10px] text-right {m.value ? 'text-white' : 'text-zinc-600'}">
+								{m.value ? 'ON' : 'OFF'}
+							</span>
+						{/if}
+					{/each}
+				</div>
 			</div>
 		{/if}
 
