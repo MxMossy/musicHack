@@ -745,7 +745,7 @@
 			</div>
 
 			<!-- mappings grid -->
-			<div class="w-full max-w-2xl">
+			<div class="w-full max-w-2xl max-h-64 overflow-y-auto border border-zinc-800 p-3">
 				<div class="grid grid-cols-[1fr_auto_auto] gap-x-6 gap-y-1">
 					<!-- header -->
 					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">Name</span>
