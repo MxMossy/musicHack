@@ -31,6 +31,9 @@
 
 	let leftHandY = $state(0.5);
 	let leftHandActive = $state(false);
+	let indexTipEnergy = $state(0);
+	let energyMidiCC = $state(2);
+	let previousIndexTip: { x: number; y: number; t: number } | null = null;
 
 	let midiOutputs = $state<MIDIOutput[]>([]);
 	let midiOutput = $state<MIDIOutput | null>(null);
@@ -52,9 +55,53 @@
 		}
 	}
 
-	function sendCC(value: number) {
-		if (!midiOutput) return;
-		midiOutput.send([0xb0 | (midiChannel - 1), midiCC, Math.round(value * 127)]);
+	function clamp01(value: number) {
+  	  return Math.max(0, Math.min(1, value));
+	}
+
+	function sendCC(value: number, cc: number = midiCC) {
+  	  if (!midiOutput) return;
+
+  	  const midiValue = Math.max(0, Math.min(127, Math.round(clamp01(value) * 127)));
+
+  	  midiOutput.send([
+    	0xb0 | (midiChannel - 1),
+    	cc,
+    	midiValue
+  	  ]);
+	}
+
+	function computeIndexTipEnergy(indexTip: Landmark, now: number) {
+  	  if (!previousIndexTip) {
+      previousIndexTip = {
+        x: indexTip.x,
+        y: indexTip.y,
+        t: now
+      };
+      return indexTipEnergy;
+      }
+
+  	  const dtSeconds = Math.max(0.001, (now - previousIndexTip.t) / 1000);
+  	  const dx = indexTip.x - previousIndexTip.x;
+  	  const dy = indexTip.y - previousIndexTip.y;
+
+  	  const distance = Math.sqrt(dx * dx + dy * dy);
+  	  const speed = distance / dtSeconds;
+
+  	  // Tune this number. Lower = more sensitive, higher = less sensitive.
+  	  const speedForMaxEnergy = 2.5;
+
+  	  const rawEnergy = clamp01(speed / speedForMaxEnergy);
+
+  	  // Smooth so MIDI does not jitter.
+  	  indexTipEnergy = indexTipEnergy * 0.8 + rawEnergy * 0.2;
+
+  	  previousIndexTip = {
+		x: indexTip.x,
+    	y: indexTip.y,
+    	t: now
+  	  };
+  	  return indexTipEnergy;
 	}
 
 	async function initDetectors() {
@@ -159,11 +206,25 @@
 				if (hands.handednesses[i]?.[0]?.categoryName === 'Left') {
 					leftHandY = landmarks[0].y; // wrist
 					leftHandActive = true;
+
+					const indexTip = landmarks[8]; // INDEX_TIP
+					const energy = computeIndexTipEnergy(indexTip, now);
+
 					if (now - lastMidiSend > 33) {
-						sendCC(leftHandY);
+						// existing behavior: send wrist Y on selected MIDI CC
+						sendCC(leftHandY, midiCC);
+
+						// new behavior: send index-finger velocity energy on dedicated CC
+						sendCC(energy, energyMidiCC);
+						
 						lastMidiSend = now;
 					}
 				}
+			}
+
+			if (!leftHandActive) {
+				previousIndexTip = null;
+				indexTipEnergy = indexTipEnergy * 0.9;
 			}
 
 			// throttle panel updates to ~10fps to avoid thrashing Svelte reactivity
@@ -243,6 +304,17 @@
 						max="16"
 						class="w-10 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1 text-center"
 					/>
+					<span class="font-mono text-[10px] text-zinc-600">ENERGY CC</span>
+					<input
+						type="number"
+						bind:value={energyMidiCC}
+						min="0"
+						max="127"
+						class="w-10 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1 text-center"
+					/>
+					<span class="font-mono text-[10px] text-zinc-500 tabular-nums">
+						ENERGY {indexTipEnergy.toFixed(2)}
+					</span>
 					<span class="font-mono text-[10px] text-zinc-600">CC</span>
 					<input
 						type="number"
@@ -270,6 +342,16 @@
 		<div class="flex w-64 shrink-0 flex-col border-l border-zinc-800">
 			<div class="border-b border-zinc-800 px-4 py-3">
 				<span class="font-mono text-xs tracking-widest text-zinc-500 uppercase">Hand Points</span>
+			</div>
+
+			<div class="border-b border-zinc-800 px-4 py-3">
+				<p class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">Features</p>
+				<p class="mt-2 font-mono text-[10px] text-zinc-400 tabular-nums">
+					Index Energy: {indexTipEnergy.toFixed(3)}
+				</p>
+				<p class="font-mono text-[10px] text-zinc-500 tabular-nums">
+					Energy CC: {energyMidiCC}
+				</p>
 			</div>
 
 			<div class="flex-1 overflow-y-auto px-4 py-3">
