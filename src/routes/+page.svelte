@@ -17,6 +17,9 @@
 	let status = $state('');
 	let videoEl: HTMLVideoElement | undefined = $state();
 	let canvasEl: HTMLCanvasElement | undefined = $state();
+	let videoFileUrl = $state<string | null>(null);
+	let hasVideoSource = $state(false);
+	let videoMode = $state<'camera' | 'upload' | null>(null);
 	let poseLandmarker: PoseLandmarker | undefined;
 	let handLandmarker: HandLandmarker | undefined;
 	let rafId: number;
@@ -146,6 +149,7 @@
 	}
 
 	async function initDetectors() {
+		if (poseLandmarker && handLandmarker) return;
 		status = 'Loading models...';
 		const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
 		[poseLandmarker, handLandmarker] = await Promise.all([
@@ -163,17 +167,101 @@
 		status = '';
 	}
 
+	function resetTrackingState() {
+		leftHandActive = false;
+		rightHandActive = false;
+		previousLeftHandPoints.clear();
+		previousRightHandPoints.clear();
+		if (rightArmRaised) sendNote(midiMappings[3] as NoteMapping, false);
+		if (leftArmRaised) sendNote(midiMappings[2] as NoteMapping, false);
+		rightArmRaised = false;
+		prevRightArmRaised = false;
+		leftArmRaised = false;
+		prevLeftArmRaised = false;
+		leftHandEnergy = 0;
+		rightHandEnergy = 0;
+		leftHandY = 0.5;
+		rightHandY = 0.5;
+		midiMappings[0].value = 0;
+		midiMappings[1].value = 0;
+		midiMappings[2].value = false;
+		midiMappings[3].value = false;
+		midiMappings[4].value = 0;
+		midiMappings[5].value = 0;
+		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
+	}
+
+	function stopCurrentVideoSource() {
+		cancelAnimationFrame(rafId);
+		stream?.getTracks().forEach((t) => t.stop());
+		stream = null;
+		if (videoFileUrl) {
+			URL.revokeObjectURL(videoFileUrl);
+			videoFileUrl = null;
+		}
+		hasVideoSource = false;
+		videoMode = null;
+		if (videoEl) {
+			videoEl.pause();
+			videoEl.srcObject = null;
+			videoEl.removeAttribute('src');
+			videoEl.controls = false;
+			videoEl.load();
+		}
+	}
+
 	async function startCamera() {
 		error = '';
 		try {
+			stopCurrentVideoSource();
+			resetTrackingState();
 			stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-			if (videoEl) videoEl.srcObject = stream;
+			if (videoEl) {
+				videoEl.srcObject = stream;
+				videoEl.controls = false;
+				videoEl.loop = false;
+				videoEl.muted = true;
+				await videoEl.play();
+			}
 			await Promise.all([initDetectors(), initMidi()]);
+			videoMode = 'camera';
+			hasVideoSource = true;
 			runLoop();
 		} catch {
 			error = 'Camera access denied.';
 			stream = null;
 			status = '';
+			hasVideoSource = false;
+			videoMode = null;
+		}
+	}
+
+	async function handleVideoUpload(event: Event) {
+		error = '';
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file || !videoEl) return;
+
+		try {
+			stopCurrentVideoSource();
+			resetTrackingState();
+			videoFileUrl = URL.createObjectURL(file);
+			videoEl.srcObject = null;
+			videoEl.src = videoFileUrl;
+			videoEl.controls = true;
+			videoEl.loop = true;
+			videoEl.muted = true;
+			await Promise.all([initDetectors(), initMidi()]);
+			await videoEl.play();
+			videoMode = 'upload';
+			hasVideoSource = true;
+			runLoop();
+		} catch {
+			error = 'Unable to load video file.';
+			stopCurrentVideoSource();
+			resetTrackingState();
+		} finally {
+			input.value = '';
 		}
 	}
 
@@ -216,7 +304,7 @@
 	}
 
 	function runLoop() {
-		if (!videoEl || !canvasEl || !poseLandmarker || !handLandmarker || !stream) return;
+		if (!videoEl || !canvasEl || !poseLandmarker || !handLandmarker || !hasVideoSource) return;
 
 		if (videoEl.readyState >= 2) {
 			const w = videoEl.videoWidth;
@@ -305,47 +393,27 @@
 		rafId = requestAnimationFrame(runLoop);
 	}
 
-	function stopCamera() {
-		cancelAnimationFrame(rafId);
-		stream?.getTracks().forEach((t) => t.stop());
-		stream = null;
+	function stopVideo() {
+		stopCurrentVideoSource();
 		status = '';
-		leftHandActive = false;
-		rightHandActive = false;
-		previousLeftHandPoints.clear();
-		previousRightHandPoints.clear();
-		leftHandEnergy = 0;
-		rightHandEnergy = 0;
-		if (rightArmRaised) sendNote(midiMappings[3] as NoteMapping, false);
-		if (leftArmRaised) sendNote(midiMappings[2] as NoteMapping, false);
-		rightArmRaised = false;
-		prevRightArmRaised = false;
-		leftArmRaised = false;
-		prevLeftArmRaised = false;
-		midiMappings[0].value = 0;
-		midiMappings[1].value = 0;
-		midiMappings[2].value = false;
-		midiMappings[3].value = false;
-		midiMappings[4].value = 0;
-		midiMappings[5].value = 0;
-		if (videoEl) videoEl.srcObject = null;
-		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
+		resetTrackingState();
 	}
 </script>
 
 <div class="flex h-screen overflow-hidden bg-zinc-950">
 	<!-- main area -->
 	<div class="flex flex-1 flex-col items-center justify-center gap-6 p-8 min-w-0">
-		<div class="flex items-stretch gap-3 w-full max-w-2xl {stream ? '' : 'hidden'}">
+		<div class="flex items-stretch gap-3 w-full max-w-2xl {hasVideoSource ? '' : 'hidden'}">
 			<div class="relative flex-1 aspect-video">
 				<video
 					bind:this={videoEl}
 					autoplay
 					playsinline
 					muted
+					controls={videoMode === 'upload'}
 					class="h-full w-full border border-zinc-800 object-cover"
 				></video>
-				<canvas bind:this={canvasEl} class="absolute inset-0 h-full w-full"></canvas>
+				<canvas bind:this={canvasEl} class="pointer-events-none absolute inset-0 h-full w-full"></canvas>
 				{#if status}
 					<div class="absolute bottom-2 left-2 z-10 flex items-center gap-1.5">
 						<div class="h-1.5 w-1.5 animate-pulse bg-zinc-400"></div>
@@ -364,14 +432,22 @@
 			</div>
 		</div>
 
-		<button
-			onclick={stream ? stopCamera : startCamera}
-			class="cursor-pointer rounded-none border border-zinc-600 px-6 py-2 font-mono text-xs tracking-widest text-zinc-200 uppercase transition-colors hover:bg-zinc-800"
-		>
-			{stream ? 'Stop' : 'Start Camera'}
-		</button>
+		<div class="flex items-center gap-3">
+			<button
+				onclick={hasVideoSource ? stopVideo : startCamera}
+				class="cursor-pointer rounded-none border border-zinc-600 px-6 py-2 font-mono text-xs tracking-widest text-zinc-200 uppercase transition-colors hover:bg-zinc-800"
+			>
+				{hasVideoSource ? 'Stop' : 'Start Camera'}
+			</button>
+			<label
+				class="cursor-pointer rounded-none border border-zinc-700 px-6 py-2 font-mono text-xs tracking-widest text-zinc-300 uppercase transition-colors hover:bg-zinc-900"
+			>
+				Upload Video
+				<input type="file" accept="video/*" class="hidden" onchange={handleVideoUpload} />
+			</label>
+		</div>
 
-		{#if stream}
+		{#if hasVideoSource}
 			<!-- MIDI device controls -->
 			<div class="flex items-center gap-3">
 				<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">MIDI Out</span>
