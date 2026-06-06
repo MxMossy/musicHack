@@ -20,6 +20,7 @@
 		"@sveltejs/vite-plugin-svelte": "^7.0.0",
 		"@tailwindcss/vite": "^4.2.2",
 		"@types/node": "^24",
+		"@types/qrcode": "^1.5.6",
 		"eslint": "^10.4.0",
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-svelte": "^3.17.0",
@@ -35,6 +36,8 @@
 		"vite": "^8.0.7"
 	},
 	"dependencies": {
-		"@mediapipe/tasks-vision": "^0.10.35"
+		"@mediapipe/tasks-vision": "^0.10.35",
+		"peerjs": "^1.5.5",
+		"qrcode": "^1.5.4"
 	}
 }
