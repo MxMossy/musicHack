@@ -2,6 +2,7 @@
 	import { onDestroy } from 'svelte';
 	import QRCode from 'qrcode';
 	import Peer from 'peerjs';
+	import { peerStore, type Orientation } from './peerStore.svelte.ts';
 
 	let { open = $bindable(false) } = $props();
 
@@ -16,6 +17,10 @@
 	let connectedPeers = $state(0);
 	let peer: Peer | null = null;
 
+	function fmt(n: number | null): string {
+		return n == null ? '--' : n.toFixed(1).padStart(7);
+	}
+
 	async function setup() {
 		const url = `${window.location.origin}/peer?joincode=${joinCode}`;
 		qrDataUrl = await QRCode.toDataURL(url, {
@@ -27,7 +32,14 @@
 		peer = new Peer(joinCode);
 		peer.on('connection', (conn) => {
 			connectedPeers++;
-			conn.on('close', () => { connectedPeers = Math.max(0, connectedPeers - 1); });
+			conn.on('data', (raw) => {
+				const data = raw as Orientation;
+				peerStore.update(conn.peer, data);
+			});
+			conn.on('close', () => {
+				connectedPeers = Math.max(0, connectedPeers - 1);
+				peerStore.remove(conn.peer);
+			});
 		});
 	}
 
@@ -36,6 +48,7 @@
 		peer = null;
 		connectedPeers = 0;
 		qrDataUrl = '';
+		peerStore.clear();
 	}
 
 	$effect(() => {
@@ -44,6 +57,8 @@
 	});
 
 	onDestroy(teardown);
+
+	const orientationEntries = $derived(Object.entries(peerStore.orientations));
 </script>
 
 {#if open}
@@ -81,6 +96,35 @@
 			<p class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase">
 				{connectedPeers} {connectedPeers === 1 ? 'peer' : 'peers'} connected
 			</p>
+
+			<!-- orientation data -->
+			{#if orientationEntries.length > 0}
+				<div class="w-full border-t border-zinc-800 pt-4 flex flex-col gap-3">
+					{#each orientationEntries as [id, o], i}
+						<div>
+							{#if orientationEntries.length > 1}
+								<p class="font-mono text-[9px] tracking-widest text-zinc-600 uppercase mb-1">
+									Peer {i + 1}
+								</p>
+							{/if}
+							<div class="grid grid-cols-3 gap-4 text-center">
+								<div>
+									<p class="font-mono text-[9px] text-zinc-600 uppercase tracking-widest">α</p>
+									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(o.alpha)}°</p>
+								</div>
+								<div>
+									<p class="font-mono text-[9px] text-zinc-600 uppercase tracking-widest">β</p>
+									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(o.beta)}°</p>
+								</div>
+								<div>
+									<p class="font-mono text-[9px] text-zinc-600 uppercase tracking-widest">γ</p>
+									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(o.gamma)}°</p>
+								</div>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}
