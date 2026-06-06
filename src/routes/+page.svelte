@@ -93,6 +93,21 @@
 		return Math.max(0, Math.min(1, value));
 	}
 
+	function isLandmarkOnScreen(landmark: Landmark | undefined, margin = 0): boolean {
+		if (!landmark) return false;
+		return (
+			landmark.x >= -margin &&
+			landmark.x <= 1 + margin &&
+			landmark.y >= -margin &&
+			landmark.y <= 1 + margin
+		);
+	}
+
+	function isHandOnScreen(landmarks: Landmark[], margin = 0.03): boolean {
+		const visibleCount = landmarks.filter((landmark) => isLandmarkOnScreen(landmark, margin)).length;
+		return visibleCount >= 16;
+	}
+
 	function computeAverageLandmarkSpeed(
 		landmarks: Landmark[],
 		previousPoints: Map<number, PreviousPoint>,
@@ -315,6 +330,8 @@
 			const ctx = canvasEl.getContext('2d')!;
 			ctx.clearRect(0, 0, w, h);
 			const now = performance.now();
+			const shouldSendMidi = now - lastMidiSend > 33;
+			let sentMidiThisFrame = false;
 
 			const pose = poseLandmarker.detectForVideo(videoEl, now);
 			ctx.strokeStyle = 'rgba(255,255,255,0.45)';
@@ -354,39 +371,74 @@
 					leftHandY = landmarks[0].y;
 					leftHandActive = true;
 					midiMappings[0].value = leftHandY;
-					const energy = computeLeftHandEnergy(landmarks, now);
 					const leftHandEnergyMapping = midiMappings[4];
+					const onScreen = isHandOnScreen(landmarks);
+					if (!onScreen) {
+						previousLeftHandPoints.clear();
+						leftHandEnergy = 0;
+						leftHandEnergyMapping.value = 0;
+						if (shouldSendMidi) {
+							sendCC(midiMappings[0] as CcMapping, leftHandY);
+							sendCC(leftHandEnergyMapping as CcMapping, 0);
+							sentMidiThisFrame = true;
+						}
+						continue;
+					}
+					const energy = computeLeftHandEnergy(landmarks, now);
 					leftHandEnergyMapping.value = energy;
-					if (now - lastMidiSend > 33) {
+					if (shouldSendMidi) {
 						sendCC(midiMappings[0] as CcMapping, leftHandY);
 						sendCC(leftHandEnergyMapping as CcMapping, energy);
+						sentMidiThisFrame = true;
 					}
 				} else if (handedness === 'Right') {
 					rightHandY = landmarks[0].y;
 					rightHandActive = true;
 					midiMappings[1].value = rightHandY;
-					const energy = computeRightHandEnergy(landmarks, now);
 					const rightHandEnergyMapping = midiMappings[5];
+					const onScreen = isHandOnScreen(landmarks);
+					if (!onScreen) {
+						previousRightHandPoints.clear();
+						rightHandEnergy = 0;
+						rightHandEnergyMapping.value = 0;
+						if (shouldSendMidi) {
+							sendCC(midiMappings[1] as CcMapping, rightHandY);
+							sendCC(rightHandEnergyMapping as CcMapping, 0);
+							sentMidiThisFrame = true;
+						}
+						continue;
+					}
+					const energy = computeRightHandEnergy(landmarks, now);
 					rightHandEnergyMapping.value = energy;
-					if (now - lastMidiSend > 33) {
+					if (shouldSendMidi) {
 						sendCC(midiMappings[1] as CcMapping, rightHandY);
 						sendCC(rightHandEnergyMapping as CcMapping, energy);
+						sentMidiThisFrame = true;
 					}
 				}
-				if (now - lastMidiSend > 33) lastMidiSend = now;
 			}
 
 			if (!leftHandActive) {
 				previousLeftHandPoints.clear();
-				leftHandEnergy = leftHandEnergy * 0.9;
-				midiMappings[4].value = leftHandEnergy;
+				leftHandEnergy = 0;
+				midiMappings[4].value = 0;
+				if (shouldSendMidi) {
+					sendCC(midiMappings[4] as CcMapping, 0);
+					sentMidiThisFrame = true;
+				}
 			}
 
 			if (!rightHandActive) {
 				previousRightHandPoints.clear();
-				rightHandEnergy = rightHandEnergy * 0.9;
-				midiMappings[5].value = rightHandEnergy;
+				rightHandEnergy = 0;
+				midiMappings[5].value = 0;
+				if (shouldSendMidi) {
+					sendCC(midiMappings[5] as CcMapping, 0);
+					sentMidiThisFrame = true;
+				}
 			}
+
+			if (sentMidiThisFrame) lastMidiSend = now;
 
 		}
 
