@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { FilesetResolver, HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
+	import PeerModal from '$lib/PeerModal.svelte';
 
 	const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 	const POSE_MODEL =
@@ -12,6 +13,7 @@
 	// fingertips only: [4, 8, 12, 16, 20]
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
+	let peerModalOpen = $state(false);
 	let stream = $state<MediaStream | null>(null);
 	let error = $state('');
 	let status = $state('');
@@ -516,3 +518,13 @@
 		{/if}
 	</div>
 </div>
+
+<!-- peer button -->
+<button
+	onclick={() => (peerModalOpen = true)}
+	class="fixed right-4 top-4 z-20 cursor-pointer rounded-none border border-zinc-700 px-3 py-1.5 font-mono text-[10px] tracking-widest text-zinc-500 uppercase transition-colors hover:border-zinc-500 hover:text-zinc-300"
+>
+	Peer
+</button>
+
+<PeerModal bind:open={peerModalOpen} />
