@@ -239,6 +239,68 @@
 		return rightHandEnergy;
 	}
 
+	function averageLandmarks(points: Array<Landmark | undefined>): Landmark | undefined {
+		let sumX = 0;
+		let sumY = 0;
+		let sumZ = 0;
+		let count = 0;
+
+		for (const point of points) {
+			if (!point) continue;
+			sumX += point.x;
+			sumY += point.y;
+			sumZ += point.z;
+			count += 1;
+		}
+
+		if (count === 0) return undefined;
+
+		return {
+			x: sumX / count,
+			y: sumY / count,
+			z: sumZ / count
+		};
+	}
+
+	function computeBodyReference(poseLandmarks: Landmark[]) {
+		const shoulderCenter = averageLandmarks([poseLandmarks[11], poseLandmarks[12]]);
+		const hipCenter = averageLandmarks([poseLandmarks[23], poseLandmarks[24]]);
+
+		if (!shoulderCenter || !hipCenter) return undefined;
+
+		const ankleCenter = averageLandmarks([poseLandmarks[27], poseLandmarks[28]]);
+		const torsoHeight = Math.abs(hipCenter.y - shoulderCenter.y);
+		const bodyHeight = ankleCenter
+			? Math.abs(ankleCenter.y - shoulderCenter.y)
+			: torsoHeight;
+
+		return {
+			shoulderCenter,
+			hipCenter,
+			ankleCenter,
+			torsoHeight,
+			bodyHeight
+		};
+	}
+
+	function computeRelativeVerticalPosition(point: Landmark, topY: number, bottomY: number): number {
+		return clamp01((bottomY - point.y) / Math.max(0.001, bottomY - topY));
+	}
+
+	function computeRelativeHandY(wrist: Landmark, poseLandmarks: Landmark[]): number {
+		const bodyReference = computeBodyReference(poseLandmarks);
+		if (!bodyReference) return clamp01(wrist.y);
+
+		const upperExtension = bodyReference.torsoHeight * 0.75;
+		const extendedTopY = bodyReference.shoulderCenter.y - upperExtension;
+
+		return computeRelativeVerticalPosition(
+			wrist,
+			extendedTopY,
+			bodyReference.hipCenter.y
+		);
+	}
+
 	async function initDetectors() {
 		if (poseLandmarker && handLandmarker) return;
 		status = 'Loading models...';
@@ -410,6 +472,7 @@
 			const now = performance.now();
 			const shouldSendMidi = now - lastMidiSend > 33;
 			let sentMidiThisFrame = false;
+			let currentPoseLandmarks: Landmark[] | undefined;
 			let leftPoseWrist: Landmark | undefined;
 			let rightPoseWrist: Landmark | undefined;
 			let poseScale = 0.08;
@@ -418,6 +481,7 @@
 			ctx.strokeStyle = 'rgba(255,255,255,0.45)';
 			ctx.lineWidth = 1.5;
 			for (const landmarks of pose.landmarks) {
+				currentPoseLandmarks = landmarks;
 				drawConnections(ctx, landmarks, PoseLandmarker.POSE_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 3, w, h);
 				leftPoseWrist = landmarks[15];
@@ -452,7 +516,9 @@
 				drawJoints(ctx, landmarks, 2.5, w, h);
 				const handedness = hands.handednesses[i]?.[0]?.categoryName;
 				if (handedness === 'Left') {
-					leftHandY = landmarks[0].y;
+					leftHandY = currentPoseLandmarks
+						? computeRelativeHandY(landmarks[0], currentPoseLandmarks)
+						: clamp01(landmarks[0].y);
 					leftHandActive = true;
 					previousLeftPoseWristPoints.clear();
 					midiMappings[0].value = leftHandY;
@@ -477,7 +543,9 @@
 						sentMidiThisFrame = true;
 					}
 				} else if (handedness === 'Right') {
-					rightHandY = landmarks[0].y;
+					rightHandY = currentPoseLandmarks
+						? computeRelativeHandY(landmarks[0], currentPoseLandmarks)
+						: clamp01(landmarks[0].y);
 					rightHandActive = true;
 					previousRightPoseWristPoints.clear();
 					midiMappings[1].value = rightHandY;
@@ -508,9 +576,14 @@
 				previousLeftHandPoints.clear();
 				const leftPoseWristOnScreen = isLandmarkOnScreen(leftPoseWrist, 0.08);
 				if (leftPoseWrist && leftPoseWristOnScreen) {
+					leftHandY = currentPoseLandmarks
+						? computeRelativeHandY(leftPoseWrist, currentPoseLandmarks)
+						: clamp01(leftPoseWrist.y);
+					midiMappings[0].value = leftHandY;
 					const energy = computeLeftPoseWristEnergy(leftPoseWrist, poseScale, now);
 					midiMappings[4].value = energy;
 					if (shouldSendMidi) {
+						sendCC(midiMappings[0] as CcMapping, leftHandY);
 						sendCC(midiMappings[4] as CcMapping, energy);
 						sentMidiThisFrame = true;
 					}
@@ -529,9 +602,14 @@
 				previousRightHandPoints.clear();
 				const rightPoseWristOnScreen = isLandmarkOnScreen(rightPoseWrist, 0.08);
 				if (rightPoseWrist && rightPoseWristOnScreen) {
+					rightHandY = currentPoseLandmarks
+						? computeRelativeHandY(rightPoseWrist, currentPoseLandmarks)
+						: clamp01(rightPoseWrist.y);
+					midiMappings[1].value = rightHandY;
 					const energy = computeRightPoseWristEnergy(rightPoseWrist, poseScale, now);
 					midiMappings[5].value = energy;
 					if (shouldSendMidi) {
+						sendCC(midiMappings[1] as CcMapping, rightHandY);
 						sendCC(midiMappings[5] as CcMapping, energy);
 						sentMidiThisFrame = true;
 					}
