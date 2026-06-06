@@ -262,6 +262,12 @@
 					class="h-full w-full border border-zinc-800 object-cover"
 				></video>
 				<canvas bind:this={canvasEl} class="absolute inset-0 h-full w-full"></canvas>
+				{#if status}
+					<div class="absolute bottom-2 left-2 z-10 flex items-center gap-1.5">
+						<div class="h-1.5 w-1.5 animate-pulse bg-zinc-400"></div>
+						<span class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase">{status}</span>
+					</div>
+				{/if}
 			</div>
 
 			<!-- left hand y slider -->
@@ -321,7 +327,7 @@
 						bind:value={midiCC}
 						min="0"
 						max="127"
-						class="w-10 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1 text-center"
+						class="w-16 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1 text-center"
 					/>
 				{:else}
 					<span class="font-mono text-[10px] text-zinc-700">No MIDI outputs</span>
@@ -329,9 +335,6 @@
 			</div>
 		{/if}
 
-		{#if status}
-			<p class="font-mono text-xs tracking-wide text-zinc-500">{status}</p>
-		{/if}
 		{#if error}
 			<p class="font-mono text-xs tracking-wide text-red-400">{error}</p>
 		{/if}
