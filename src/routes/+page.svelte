@@ -8,6 +8,7 @@
 		'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
 	const LEFT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
+	const RIGHT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	// fingertips only: [4, 8, 12, 16, 20]
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
@@ -28,7 +29,9 @@
 	let leftHandEnergy = $state(0);
 	let rightHandY = $state(0.5);
 	let rightHandActive = $state(false);
+	let rightHandEnergy = $state(0);
 	let previousLeftHandPoints = new Map<number, PreviousPoint>();
+	let previousRightHandPoints = new Map<number, PreviousPoint>();
 
 	let rightArmRaised = $state(false);
 	let prevRightArmRaised = false;
@@ -52,6 +55,7 @@
 		{ name: 'Left Arm',     type: 'note', number: 61, value: false },
 		{ name: 'Right Arm',    type: 'note', number: 60, value: false },
 		{ name: 'Left Hand Energy', type: 'cc', number: 3, value: 0 },
+		{ name: 'Right Hand Energy', type: 'cc', number: 4, value: 0 },
 	]);
 
 	async function initMidi() {
@@ -126,6 +130,19 @@
 		const rawEnergy = clamp01(averageSpeed / speedForMaxEnergy);
 		leftHandEnergy = leftHandEnergy * 0.8 + rawEnergy * 0.2;
 		return leftHandEnergy;
+	}
+
+	function computeRightHandEnergy(landmarks: Landmark[], now: number): number {
+		const speedForMaxEnergy = 2.0;
+		const averageSpeed = computeAverageLandmarkSpeed(
+			landmarks,
+			previousRightHandPoints,
+			RIGHT_HAND_ENERGY_LANDMARKS,
+			now
+		);
+		const rawEnergy = clamp01(averageSpeed / speedForMaxEnergy);
+		rightHandEnergy = rightHandEnergy * 0.8 + rawEnergy * 0.2;
+		return rightHandEnergy;
 	}
 
 	async function initDetectors() {
@@ -259,8 +276,12 @@
 					rightHandY = landmarks[0].y;
 					rightHandActive = true;
 					midiMappings[1].value = rightHandY;
+					const energy = computeRightHandEnergy(landmarks, now);
+					const rightHandEnergyMapping = midiMappings[5];
+					rightHandEnergyMapping.value = energy;
 					if (now - lastMidiSend > 33) {
 						sendCC(midiMappings[1] as CcMapping, rightHandY);
+						sendCC(rightHandEnergyMapping as CcMapping, energy);
 					}
 				}
 				if (now - lastMidiSend > 33) lastMidiSend = now;
@@ -270,6 +291,12 @@
 				previousLeftHandPoints.clear();
 				leftHandEnergy = leftHandEnergy * 0.9;
 				midiMappings[4].value = leftHandEnergy;
+			}
+
+			if (!rightHandActive) {
+				previousRightHandPoints.clear();
+				rightHandEnergy = rightHandEnergy * 0.9;
+				midiMappings[5].value = rightHandEnergy;
 			}
 
 		}
@@ -285,7 +312,9 @@
 		leftHandActive = false;
 		rightHandActive = false;
 		previousLeftHandPoints.clear();
+		previousRightHandPoints.clear();
 		leftHandEnergy = 0;
+		rightHandEnergy = 0;
 		if (rightArmRaised) sendNote(midiMappings[3] as NoteMapping, false);
 		if (leftArmRaised) sendNote(midiMappings[2] as NoteMapping, false);
 		rightArmRaised = false;
@@ -297,6 +326,7 @@
 		midiMappings[2].value = false;
 		midiMappings[3].value = false;
 		midiMappings[4].value = 0;
+		midiMappings[5].value = 0;
 		if (videoEl) videoEl.srcObject = null;
 		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
 	}
