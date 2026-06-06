@@ -256,6 +256,7 @@
 			ctx.strokeStyle = 'rgba(255,255,255,0.75)';
 			ctx.lineWidth = 1;
 			leftHandActive = false;
+			rightHandActive = false;
 			for (let i = 0; i < hands.landmarks.length; i++) {
 				const landmarks = hands.landmarks[i];
 				drawConnections(ctx, landmarks, HandLandmarker.HAND_CONNECTIONS, w, h);
