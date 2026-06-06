@@ -7,15 +7,7 @@
 	const HAND_MODEL =
 		'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-	const LANDMARK_NAMES = [
-		'WRIST',
-		'THUMB_CMC', 'THUMB_MCP', 'THUMB_IP', 'THUMB_TIP',
-		'INDEX_MCP', 'INDEX_PIP', 'INDEX_DIP', 'INDEX_TIP',
-		'MIDDLE_MCP', 'MIDDLE_PIP', 'MIDDLE_DIP', 'MIDDLE_TIP',
-		'RING_MCP', 'RING_PIP', 'RING_DIP', 'RING_TIP',
-		'PINKY_MCP', 'PINKY_PIP', 'PINKY_DIP', 'PINKY_TIP',
-	];
-	const LEFT_HAND_ENERGY_LANDMARKS = LANDMARK_NAMES.map((_, i) => i);
+	const LEFT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	// fingertips only: [4, 8, 12, 16, 20]
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
@@ -30,9 +22,6 @@
 
 	type Landmark = { x: number; y: number; z: number };
 	type PreviousPoint = { x: number; y: number; t: number };
-	let handData = $state<Landmark[][]>([]);
-	let lastDataUpdate = 0;
-
 	// pose detection state (used for slider + note gate logic)
 	let leftHandY = $state(0.5);
 	let leftHandActive = $state(false);
@@ -127,7 +116,7 @@
 	}
 
 	function computeLeftHandEnergy(landmarks: Landmark[], now: number): number {
-		const speedForMaxEnergy = 2.5;
+		const speedForMaxEnergy = 2.0;
 		const averageSpeed = computeAverageLandmarkSpeed(
 			landmarks,
 			previousLeftHandPoints,
@@ -283,10 +272,6 @@
 				midiMappings[4].value = leftHandEnergy;
 			}
 
-			if (now - lastDataUpdate > 100) {
-				handData = hands.landmarks as Landmark[][];
-				lastDataUpdate = now;
-			}
 		}
 
 		rafId = requestAnimationFrame(runLoop);
@@ -297,7 +282,6 @@
 		stream?.getTracks().forEach((t) => t.stop());
 		stream = null;
 		status = '';
-		handData = [];
 		leftHandActive = false;
 		rightHandActive = false;
 		previousLeftHandPoints.clear();
@@ -424,39 +408,4 @@
 			<p class="font-mono text-xs tracking-wide text-red-400">{error}</p>
 		{/if}
 	</div>
-
-	<!-- side panel -->
-	{#if stream}
-		<div class="flex w-64 shrink-0 flex-col border-l border-zinc-800">
-			<div class="border-b border-zinc-800 px-4 py-3">
-				<span class="font-mono text-xs tracking-widest text-zinc-500 uppercase">Hand Points</span>
-			</div>
-
-			<div class="flex-1 overflow-y-auto px-4 py-3">
-				{#if handData.length === 0}
-					<p class="font-mono text-xs text-zinc-700">No hands detected</p>
-				{:else}
-					{#each handData as hand, hi}
-						<div class="mb-5">
-							<p class="mb-2 font-mono text-xs tracking-widest text-zinc-500 uppercase">
-								Hand {hi + 1}
-							</p>
-							{#each hand as lm, i}
-								<div class="mb-1.5">
-									<p class="font-mono text-[10px] text-zinc-600">
-										{String(i).padStart(2, '0')} {LANDMARK_NAMES[i]}
-									</p>
-									<p class="font-mono text-[10px] pl-3 text-zinc-400 tabular-nums">
-										x {lm.x.toFixed(3)}
-										y {lm.y.toFixed(3)}
-										<span style="color: {depthColor(lm.z)}">z {lm.z.toFixed(3)}</span>
-									</p>
-								</div>
-							{/each}
-						</div>
-					{/each}
-				{/if}
-			</div>
-		</div>
-	{/if}
 </div>
