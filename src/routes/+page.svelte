@@ -98,8 +98,8 @@
 		{ name: 'Right Foot Y', type: 'cc', number: 8, value: 0 },
 		{ name: 'Left Hand Energy', type: 'cc', number: 9, value: 0 },
 		{ name: 'Right Hand Energy', type: 'cc', number: 10, value: 0 },
-		{ name: 'Left Hand Openness', type: 'cc', number: 11, value: 0 },
-		{ name: 'Right Hand Openness', type: 'cc', number: 12, value: 0 },
+		{ name: 'Left Hand Openness', type: 'cc', number: 13, value: 0 },
+		{ name: 'Right Hand Openness', type: 'cc', number: 14, value: 0 },
 		{ name: 'Left Arm', type: 'note', number: 61, value: false },
 		{ name: 'Right Arm', type: 'note', number: 60, value: false },
 		{ name: 'Left Energy Burst', type: 'note', number: 62, value: false },
@@ -108,6 +108,8 @@
 		{ name: 'Left Closed Hand', type: 'note', number: 65, value: false },
 		{ name: 'Right Open Hand', type: 'note', number: 66, value: false },
 		{ name: 'Right Closed Hand', type: 'note', number: 67, value: false },
+		{ name: 'Left Hand Rotation', type: 'cc', number: 11, value: 0.5 },
+		{ name: 'Right Hand Rotation', type: 'cc', number: 12, value: 0.5 },
 	]);
 	let leftEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
 	let rightEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
@@ -302,6 +304,19 @@
 		return count > 0 ? total / count : 0;
 	}
 
+	function computeHandRotation(landmarks: Landmark[], handedness: 'Left' | 'Right'): number {
+		const wrist = landmarks[0];
+		const middleMcp = landmarks[9];
+		if (!wrist || !middleMcp) return 0.5;
+
+		const dx = middleMcp.x - wrist.x;
+		const dy = middleMcp.y - wrist.y;
+		const angle = Math.atan2(dx, -dy);
+		const maxAngle = Math.PI / 3;
+		const signedAngle = handedness === 'Left' ? angle : -angle;
+		return clamp01(0.5 + signedAngle / (2 * maxAngle));
+	}
+
 	function computeAverageLandmarkSpeed(
 		landmarks: Landmark[],
 		previousPoints: Map<number, PreviousPoint>,
@@ -470,6 +485,8 @@
 		leftHandY = 0.5;
 		rightHandY = 0.5;
 		resetMidiMappingValues();
+		setCcValue('Left Hand Rotation', 0.5);
+		setCcValue('Right Hand Rotation', 0.5);
 		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
 	}
 
@@ -719,6 +736,7 @@
 					setCcValue('Left Hand Y', leftHandY);
 					setCcValue('Left Hand X', leftHandX);
 					const leftHandEnergyMapping = findCcMapping('Left Hand Energy');
+					const leftHandRotation = computeHandRotation(landmarks, 'Left');
 					const onScreen = isHandOnScreen(landmarks);
 					if (!onScreen) {
 						previousLeftHandPoints.clear();
@@ -726,17 +744,20 @@
 						previousLeftGesture = 'None';
 						if (leftHandEnergyMapping) leftHandEnergyMapping.value = 0;
 						setCcValue('Left Hand Openness', 0);
+						setCcValue('Left Hand Rotation', 0.5);
 						if (shouldSendMidi) {
 							setCcValue('Left Hand Y', leftHandY, true);
 							setCcValue('Left Hand X', leftHandX, true);
 							setCcValue('Left Hand Energy', 0, true);
 							setCcValue('Left Hand Openness', 0, true);
+							setCcValue('Left Hand Rotation', 0.5, true);
 							sentMidiThisFrame = true;
 						}
 						continue;
 					}
 					const openness = computeHandOpenness(landmarks);
 					setCcValue('Left Hand Openness', openness);
+					setCcValue('Left Hand Rotation', leftHandRotation);
 					if (
 						(gestureName === 'Open_Palm' || gestureName === 'Closed_Fist') &&
 						gestureScore >= 0.6
@@ -754,6 +775,7 @@
 						setCcValue('Left Hand X', leftHandX, true);
 						setCcValue('Left Hand Energy', energy, true);
 						setCcValue('Left Hand Openness', openness, true);
+						setCcValue('Left Hand Rotation', leftHandRotation, true);
 						sentMidiThisFrame = true;
 					}
 				} else if (handedness === 'Right') {
@@ -768,6 +790,7 @@
 					setCcValue('Right Hand Y', rightHandY);
 					setCcValue('Right Hand X', rightHandX);
 					const rightHandEnergyMapping = findCcMapping('Right Hand Energy');
+					const rightHandRotation = computeHandRotation(landmarks, 'Right');
 					const onScreen = isHandOnScreen(landmarks);
 					if (!onScreen) {
 						previousRightHandPoints.clear();
@@ -775,17 +798,20 @@
 						previousRightGesture = 'None';
 						if (rightHandEnergyMapping) rightHandEnergyMapping.value = 0;
 						setCcValue('Right Hand Openness', 0);
+						setCcValue('Right Hand Rotation', 0.5);
 						if (shouldSendMidi) {
 							setCcValue('Right Hand Y', rightHandY, true);
 							setCcValue('Right Hand X', rightHandX, true);
 							setCcValue('Right Hand Energy', 0, true);
 							setCcValue('Right Hand Openness', 0, true);
+							setCcValue('Right Hand Rotation', 0.5, true);
 							sentMidiThisFrame = true;
 						}
 						continue;
 					}
 					const openness = computeHandOpenness(landmarks);
 					setCcValue('Right Hand Openness', openness);
+					setCcValue('Right Hand Rotation', rightHandRotation);
 					if (
 						(gestureName === 'Open_Palm' || gestureName === 'Closed_Fist') &&
 						gestureScore >= 0.6
@@ -803,6 +829,7 @@
 						setCcValue('Right Hand X', rightHandX, true);
 						setCcValue('Right Hand Energy', energy, true);
 						setCcValue('Right Hand Openness', openness, true);
+						setCcValue('Right Hand Rotation', rightHandRotation, true);
 						sentMidiThisFrame = true;
 					}
 				}
@@ -812,6 +839,7 @@
 				previousLeftGesture = 'None';
 				previousLeftHandPoints.clear();
 				setCcValue('Left Hand Openness', 0);
+				setCcValue('Left Hand Rotation', 0.5);
 				const leftPoseWristOnScreen = isLandmarkOnScreen(leftPoseWrist, 0.08);
 				if (leftPoseWrist && leftPoseWristOnScreen) {
 					leftHandY = currentPoseLandmarks
@@ -829,6 +857,7 @@
 						setCcValue('Left Hand X', leftHandX, true);
 						setCcValue('Left Hand Energy', energy, true);
 						setCcValue('Left Hand Openness', 0, true);
+						setCcValue('Left Hand Rotation', 0.5, true);
 						sentMidiThisFrame = true;
 					}
 				} else {
@@ -838,6 +867,7 @@
 					if (shouldSendMidi) {
 						setCcValue('Left Hand Energy', 0, true);
 						setCcValue('Left Hand Openness', 0, true);
+						setCcValue('Left Hand Rotation', 0.5, true);
 						sentMidiThisFrame = true;
 					}
 				}
@@ -847,6 +877,7 @@
 				previousRightGesture = 'None';
 				previousRightHandPoints.clear();
 				setCcValue('Right Hand Openness', 0);
+				setCcValue('Right Hand Rotation', 0.5);
 				const rightPoseWristOnScreen = isLandmarkOnScreen(rightPoseWrist, 0.08);
 				if (rightPoseWrist && rightPoseWristOnScreen) {
 					rightHandY = currentPoseLandmarks
@@ -864,6 +895,7 @@
 						setCcValue('Right Hand X', rightHandX, true);
 						setCcValue('Right Hand Energy', energy, true);
 						setCcValue('Right Hand Openness', 0, true);
+						setCcValue('Right Hand Rotation', 0.5, true);
 						sentMidiThisFrame = true;
 					}
 				} else {
@@ -873,6 +905,7 @@
 					if (shouldSendMidi) {
 						setCcValue('Right Hand Energy', 0, true);
 						setCcValue('Right Hand Openness', 0, true);
+						setCcValue('Right Hand Rotation', 0.5, true);
 						sentMidiThisFrame = true;
 					}
 				}
