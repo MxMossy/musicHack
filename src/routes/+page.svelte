@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FilesetResolver, HandLandmarker, PoseLandmarker } from '@mediapipe/tasks-vision';
+	import { FilesetResolver, GestureRecognizer, PoseLandmarker } from '@mediapipe/tasks-vision';
 	import {
 		clamp01,
 		computeFootPoint,
@@ -14,8 +14,8 @@
 	const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 	const POSE_MODEL =
 		'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
-	const HAND_MODEL =
-		'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+	const GESTURE_MODEL =
+		'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task';
 
 	const LEFT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	const RIGHT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
@@ -39,10 +39,11 @@
 	let hasVideoSource = $state(false);
 	let videoMode = $state<'camera' | 'upload' | null>(null);
 	let poseLandmarker: PoseLandmarker | undefined;
-	let handLandmarker: HandLandmarker | undefined;
+	let gestureRecognizer: GestureRecognizer | undefined;
 	let rafId: number;
 
 	type PreviousPoint = { x: number; y: number; t: number };
+	type HandGestureName = 'Open_Palm' | 'Closed_Fist' | 'None';
 	// pose detection state (used for slider + note gate logic)
 	let leftHandY = $state(0.5);
 	let leftHandActive = $state(false);
@@ -54,6 +55,8 @@
 	let previousRightHandPoints = new Map<number, PreviousPoint>();
 	let previousLeftPoseWristPoints = new Map<number, PreviousPoint>();
 	let previousRightPoseWristPoints = new Map<number, PreviousPoint>();
+	let previousLeftGesture: HandGestureName = 'None';
+	let previousRightGesture: HandGestureName = 'None';
 
 	let rightArmRaised = $state(false);
 	let prevRightArmRaised = false;
@@ -86,10 +89,16 @@
 		{ name: 'Right Foot Y', type: 'cc', number: 8, value: 0 },
 		{ name: 'Left Hand Energy', type: 'cc', number: 9, value: 0 },
 		{ name: 'Right Hand Energy', type: 'cc', number: 10, value: 0 },
+		{ name: 'Left Hand Openness', type: 'cc', number: 11, value: 0 },
+		{ name: 'Right Hand Openness', type: 'cc', number: 12, value: 0 },
 		{ name: 'Left Arm', type: 'note', number: 61, value: false },
 		{ name: 'Right Arm', type: 'note', number: 60, value: false },
 		{ name: 'Left Energy Burst', type: 'note', number: 62, value: false },
 		{ name: 'Right Energy Burst', type: 'note', number: 63, value: false },
+		{ name: 'Left Open Hand', type: 'note', number: 64, value: false },
+		{ name: 'Left Closed Hand', type: 'note', number: 65, value: false },
+		{ name: 'Right Open Hand', type: 'note', number: 66, value: false },
+		{ name: 'Right Closed Hand', type: 'note', number: 67, value: false },
 	]);
 	let leftEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
 	let rightEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
@@ -189,6 +198,26 @@
 		state.lastTriggerTime = now;
 	}
 
+	function handleGestureTrigger(
+		side: 'Left' | 'Right',
+		gesture: HandGestureName,
+		previousGesture: HandGestureName
+	): HandGestureName {
+		if (gesture === previousGesture) return previousGesture;
+
+		if (gesture === 'Open_Palm') {
+			const mapping = findNoteMapping(`${side} Open Hand`);
+			if (mapping) pulseNote(mapping);
+		}
+
+		if (gesture === 'Closed_Fist') {
+			const mapping = findNoteMapping(`${side} Closed Hand`);
+			if (mapping) pulseNote(mapping);
+		}
+
+		return gesture;
+	}
+
 	function isLandmarkOnScreen(landmark: Landmark | undefined, margin = 0): boolean {
 		if (!landmark) return false;
 		return (
@@ -226,6 +255,42 @@
 		const height = maxY - minY;
 		const bboxDiagonal = Math.hypot(width, height);
 		return Math.max(0.06, bboxDiagonal);
+	}
+
+	function computeHandOpenness(landmarks: Landmark[]): number {
+		const wrist = landmarks[0];
+		if (!wrist) return 0;
+
+		const fingerPairs = [
+			{ mcp: 5, tip: 8 },
+			{ mcp: 9, tip: 12 },
+			{ mcp: 13, tip: 16 },
+			{ mcp: 17, tip: 20 }
+		] as const;
+		const closedRatio = 1.15;
+		const openRatio = 1.75;
+		let total = 0;
+		let count = 0;
+
+		for (const { mcp, tip } of fingerPairs) {
+			const base = landmarks[mcp];
+			const fingertip = landmarks[tip];
+			if (!base || !fingertip) continue;
+
+			const wristToBase = Math.hypot(base.x - wrist.x, base.y - wrist.y, (base.z ?? 0) - (wrist.z ?? 0));
+			if (wristToBase <= 0) continue;
+
+			const wristToTip = Math.hypot(
+				fingertip.x - wrist.x,
+				fingertip.y - wrist.y,
+				(fingertip.z ?? 0) - (wrist.z ?? 0)
+			);
+			const ratio = wristToTip / wristToBase;
+			total += clamp01((ratio - closedRatio) / (openRatio - closedRatio));
+			count += 1;
+		}
+
+		return count > 0 ? total / count : 0;
 	}
 
 	function computeAverageLandmarkSpeed(
@@ -331,19 +396,23 @@
 	}
 
 	async function initDetectors() {
-		if (poseLandmarker && handLandmarker) return;
+		if (poseLandmarker && gestureRecognizer) return;
 		status = 'Loading models...';
 		const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
-		[poseLandmarker, handLandmarker] = await Promise.all([
+		[poseLandmarker, gestureRecognizer] = await Promise.all([
 			PoseLandmarker.createFromOptions(vision, {
 				baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' },
 				runningMode: 'VIDEO',
 				numPoses: 1
 			}),
-			HandLandmarker.createFromOptions(vision, {
-				baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'GPU' },
+			GestureRecognizer.createFromOptions(vision, {
+				baseOptions: { modelAssetPath: GESTURE_MODEL, delegate: 'GPU' },
 				runningMode: 'VIDEO',
-				numHands: 2
+				numHands: 2,
+				cannedGesturesClassifierOptions: {
+					scoreThreshold: 0.6,
+					categoryAllowlist: ['Open_Palm', 'Closed_Fist']
+				}
 			})
 		]);
 		status = '';
@@ -356,6 +425,8 @@
 		previousRightHandPoints.clear();
 		previousLeftPoseWristPoints.clear();
 		previousRightPoseWristPoints.clear();
+		previousLeftGesture = 'None';
+		previousRightGesture = 'None';
 		if (rightArmRaised) setNoteValue('Right Arm', false, true);
 		if (leftArmRaised) setNoteValue('Left Arm', false, true);
 		const leftEnergyBurstMapping = findNoteMapping('Left Energy Burst');
@@ -495,7 +566,7 @@
 	}
 
 	function runLoop() {
-		if (!videoEl || !canvasEl || !poseLandmarker || !handLandmarker || !hasVideoSource) return;
+		if (!videoEl || !canvasEl || !poseLandmarker || !gestureRecognizer || !hasVideoSource) return;
 
 		if (videoEl.readyState >= 2) {
 			const w = videoEl.videoWidth;
@@ -593,16 +664,19 @@
 				}
 			}
 
-			const hands = handLandmarker.detectForVideo(videoEl, now);
+			const hands = gestureRecognizer.recognizeForVideo(videoEl, now);
 			ctx.strokeStyle = 'rgba(255,255,255,0.75)';
 			ctx.lineWidth = 1;
 			leftHandActive = false;
 			rightHandActive = false;
 			for (let i = 0; i < hands.landmarks.length; i++) {
 				const landmarks = hands.landmarks[i];
-				drawConnections(ctx, landmarks, HandLandmarker.HAND_CONNECTIONS, w, h);
+				drawConnections(ctx, landmarks, GestureRecognizer.HAND_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 2.5, w, h);
 				const handedness = hands.handednesses[i]?.[0]?.categoryName;
+				const gesture = hands.gestures[i]?.[0];
+				const gestureName = gesture?.categoryName as HandGestureName | undefined;
+				const gestureScore = gesture?.score ?? 0;
 				if (handedness === 'Left') {
 					leftHandY = currentPoseLandmarks
 						? computeRelativeHandY(landmarks[0], currentPoseLandmarks)
@@ -619,14 +693,29 @@
 					if (!onScreen) {
 						previousLeftHandPoints.clear();
 						leftHandEnergy = 0;
+						previousLeftGesture = 'None';
 						if (leftHandEnergyMapping) leftHandEnergyMapping.value = 0;
+						setCcValue('Left Hand Openness', 0);
 						if (shouldSendMidi) {
 							setCcValue('Left Hand Y', leftHandY, true);
 							setCcValue('Left Hand X', leftHandX, true);
 							setCcValue('Left Hand Energy', 0, true);
+							setCcValue('Left Hand Openness', 0, true);
 							sentMidiThisFrame = true;
 						}
 						continue;
+					}
+					const openness = computeHandOpenness(landmarks);
+					setCcValue('Left Hand Openness', openness);
+					if (
+						(gestureName === 'Open_Palm' || gestureName === 'Closed_Fist') &&
+						gestureScore >= 0.6
+					) {
+						previousLeftGesture = handleGestureTrigger(
+							'Left',
+							gestureName,
+							previousLeftGesture
+						);
 					}
 					const energy = computeLeftHandEnergy(landmarks, now);
 					if (leftHandEnergyMapping) leftHandEnergyMapping.value = energy;
@@ -634,6 +723,7 @@
 						setCcValue('Left Hand Y', leftHandY, true);
 						setCcValue('Left Hand X', leftHandX, true);
 						setCcValue('Left Hand Energy', energy, true);
+						setCcValue('Left Hand Openness', openness, true);
 						sentMidiThisFrame = true;
 					}
 				} else if (handedness === 'Right') {
@@ -652,14 +742,29 @@
 					if (!onScreen) {
 						previousRightHandPoints.clear();
 						rightHandEnergy = 0;
+						previousRightGesture = 'None';
 						if (rightHandEnergyMapping) rightHandEnergyMapping.value = 0;
+						setCcValue('Right Hand Openness', 0);
 						if (shouldSendMidi) {
 							setCcValue('Right Hand Y', rightHandY, true);
 							setCcValue('Right Hand X', rightHandX, true);
 							setCcValue('Right Hand Energy', 0, true);
+							setCcValue('Right Hand Openness', 0, true);
 							sentMidiThisFrame = true;
 						}
 						continue;
+					}
+					const openness = computeHandOpenness(landmarks);
+					setCcValue('Right Hand Openness', openness);
+					if (
+						(gestureName === 'Open_Palm' || gestureName === 'Closed_Fist') &&
+						gestureScore >= 0.6
+					) {
+						previousRightGesture = handleGestureTrigger(
+							'Right',
+							gestureName,
+							previousRightGesture
+						);
 					}
 					const energy = computeRightHandEnergy(landmarks, now);
 					if (rightHandEnergyMapping) rightHandEnergyMapping.value = energy;
@@ -667,13 +772,16 @@
 						setCcValue('Right Hand Y', rightHandY, true);
 						setCcValue('Right Hand X', rightHandX, true);
 						setCcValue('Right Hand Energy', energy, true);
+						setCcValue('Right Hand Openness', openness, true);
 						sentMidiThisFrame = true;
 					}
 				}
 			}
 
 			if (!leftHandActive) {
+				previousLeftGesture = 'None';
 				previousLeftHandPoints.clear();
+				setCcValue('Left Hand Openness', 0);
 				const leftPoseWristOnScreen = isLandmarkOnScreen(leftPoseWrist, 0.08);
 				if (leftPoseWrist && leftPoseWristOnScreen) {
 					leftHandY = currentPoseLandmarks
@@ -690,6 +798,7 @@
 						setCcValue('Left Hand Y', leftHandY, true);
 						setCcValue('Left Hand X', leftHandX, true);
 						setCcValue('Left Hand Energy', energy, true);
+						setCcValue('Left Hand Openness', 0, true);
 						sentMidiThisFrame = true;
 					}
 				} else {
@@ -698,13 +807,16 @@
 					setCcValue('Left Hand Energy', 0);
 					if (shouldSendMidi) {
 						setCcValue('Left Hand Energy', 0, true);
+						setCcValue('Left Hand Openness', 0, true);
 						sentMidiThisFrame = true;
 					}
 				}
 			}
 
 			if (!rightHandActive) {
+				previousRightGesture = 'None';
 				previousRightHandPoints.clear();
+				setCcValue('Right Hand Openness', 0);
 				const rightPoseWristOnScreen = isLandmarkOnScreen(rightPoseWrist, 0.08);
 				if (rightPoseWrist && rightPoseWristOnScreen) {
 					rightHandY = currentPoseLandmarks
@@ -721,6 +833,7 @@
 						setCcValue('Right Hand Y', rightHandY, true);
 						setCcValue('Right Hand X', rightHandX, true);
 						setCcValue('Right Hand Energy', energy, true);
+						setCcValue('Right Hand Openness', 0, true);
 						sentMidiThisFrame = true;
 					}
 				} else {
@@ -729,6 +842,7 @@
 					setCcValue('Right Hand Energy', 0);
 					if (shouldSendMidi) {
 						setCcValue('Right Hand Energy', 0, true);
+						setCcValue('Right Hand Openness', 0, true);
 						sentMidiThisFrame = true;
 					}
 				}
