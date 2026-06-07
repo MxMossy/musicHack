@@ -98,8 +98,8 @@
 		{ name: 'Right Foot Y', type: 'cc', number: 8, value: 0 },
 		{ name: 'Left Hand Energy', type: 'cc', number: 9, value: 0 },
 		{ name: 'Right Hand Energy', type: 'cc', number: 10, value: 0 },
-		{ name: 'Left Hand Openness', type: 'cc', number: 13, value: 0 },
-		{ name: 'Right Hand Openness', type: 'cc', number: 14, value: 0 },
+		{ name: 'Left Hand Openness', type: 'cc', number: 11, value: 0 },
+		{ name: 'Right Hand Openness', type: 'cc', number: 12, value: 0 },
 		{ name: 'Left Arm', type: 'note', number: 61, value: false },
 		{ name: 'Right Arm', type: 'note', number: 60, value: false },
 		{ name: 'Left Energy Burst', type: 'note', number: 62, value: false },
@@ -108,8 +108,8 @@
 		{ name: 'Left Closed Hand', type: 'note', number: 65, value: false },
 		{ name: 'Right Open Hand', type: 'note', number: 66, value: false },
 		{ name: 'Right Closed Hand', type: 'note', number: 67, value: false },
-		{ name: 'Left Hand Rotation', type: 'cc', number: 11, value: 0.5 },
-		{ name: 'Right Hand Rotation', type: 'cc', number: 12, value: 0.5 },
+		{ name: 'Left Hand Rotation', type: 'cc', number: 13, value: 0.5 },
+		{ name: 'Right Hand Rotation', type: 'cc', number: 14, value: 0.5 },
 	]);
 	let leftEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
 	let rightEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
