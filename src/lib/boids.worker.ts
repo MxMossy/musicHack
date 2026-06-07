@@ -16,7 +16,7 @@ type BoidController = {
 	lastSeen: number;
 };
 
-const BOID_COUNT = 50;
+const BOID_COUNT = 30;
 const ENABLE_CONTROLLER_COLORS = true;
 const CONTROLLER_BOIDS_PER_PHONE = 1;
 const MAX_SPEED = 2.5;
