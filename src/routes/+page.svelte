@@ -39,6 +39,7 @@
 
 	let peerModalOpen = $state(false);
 	let boidsEnabled = $state(false);
+	let videoVisible = $state(true);
 	let stream = $state<MediaStream | null>(null);
 	let error = $state('');
 	let status = $state('');
@@ -966,7 +967,7 @@
 					playsinline
 					muted
 					controls={videoMode === 'upload'}
-					class="h-full w-full border border-zinc-800 object-cover"
+					class="h-full w-full border border-zinc-800 object-cover {videoVisible ? '' : 'invisible'}"
 				></video>
 				<canvas bind:this={canvasEl} class="pointer-events-none absolute inset-0 h-full w-full"
 				></canvas>
@@ -1096,13 +1097,23 @@
 	</div>
 </div>
 
-<!-- boids toggle -->
-<button
-	onclick={() => (boidsEnabled = !boidsEnabled)}
-	class="fixed top-4 left-4 z-20 cursor-pointer rounded-none border px-3 py-1.5 font-mono text-[10px] tracking-widest uppercase transition-colors {boidsEnabled ? 'border-zinc-500 text-zinc-300' : 'border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300'}"
->
-	Boids
-</button>
+<!-- top-left toggles -->
+<div class="fixed top-4 left-4 z-20 flex gap-2">
+	<button
+		onclick={() => (boidsEnabled = !boidsEnabled)}
+		class="cursor-pointer rounded-none border px-3 py-1.5 font-mono text-[10px] tracking-widest uppercase transition-colors {boidsEnabled ? 'border-zinc-500 text-zinc-300' : 'border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300'}"
+	>
+		Boids
+	</button>
+	{#if hasVideoSource}
+		<button
+			onclick={() => (videoVisible = !videoVisible)}
+			class="cursor-pointer rounded-none border px-3 py-1.5 font-mono text-[10px] tracking-widest uppercase transition-colors {videoVisible ? 'border-zinc-500 text-zinc-300' : 'border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300'}"
+		>
+			Video
+		</button>
+	{/if}
+</div>
 
 <!-- peer button -->
 <button
