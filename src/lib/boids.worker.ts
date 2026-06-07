@@ -4,6 +4,9 @@ type Boid = {
 	y: number;
 	vx: number;
 	vy: number;
+	sweepPhase: number;
+	sweepRate: number;
+	sweepForce: number;
 	excitedTurnDirection: number;
 	excitedTurnFramesRemaining: number;
 	excitedTurnCooldownFramesRemaining: number;
@@ -24,13 +27,10 @@ const ENABLE_CONTROLLER_COLORS = true;
 const CONTROLLER_BOIDS_PER_PHONE = 5;
 const MAX_SPEED = 2.5;
 const MIN_SPEED = 0.8;
-const SEP_RADIUS = 30;
-const ALI_RADIUS = 80;
-const COH_RADIUS = 80;
-const SEP_WEIGHT = 1.6;
-const ALI_WEIGHT = 1.0;
-const COH_WEIGHT = 1.0;
 const STEER_FORCE = 0.08;
+const SWEEP_RATE_MIN = 0.018;
+const SWEEP_RATE_MAX = 0.045;
+const SWEEP_FORCE_VARIATION = 0.06;
 const TRI_LENGTH = 14;
 const TRI_HALF_BASE = 5;
 const TRI_CENTER_X = TRI_LENGTH / 3;
@@ -46,8 +46,6 @@ const EXCITE_TURN_COOLDOWN_MIN = 7;
 const EXCITE_TURN_COOLDOWN_MAX = 14;
 const EXCITE_TURN_TRIGGER_BASE = 0.015;
 const EXCITE_TURN_TRIGGER_BOOST = 0.08;
-const EXCITE_SEPARATION_BOOST = 1.8;
-const EXCITE_FLOCK_BREAK_THRESHOLD = 0.28;
 const CONTROLLER_TIMEOUT_MS = 3000;
 const DEFAULT_BOID_HUE = 196;
 const CONTROLLER_HUE_MIN_DISTANCE = 24;
@@ -60,7 +58,9 @@ let boids: Boid[] = [];
 let controllers = new Map<string, BoidController>();
 let intervalId: ReturnType<typeof setInterval> | null = null;
 
-function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+function clamp01(v: number) {
+	return Math.max(0, Math.min(1, v));
+}
 
 function lerp(a: number, b: number, t: number) {
 	return a + (b - a) * t;
@@ -170,9 +170,7 @@ function createUniqueControllerHue(excludeBoidId?: string): number {
 	for (let attempt = 0; attempt < 24; attempt += 1) {
 		const hue = Math.floor(Math.random() * 360);
 		if (
-			usedHues.every(
-				(usedHue) => circularHueDistance(usedHue, hue) >= CONTROLLER_HUE_MIN_DISTANCE
-			)
+			usedHues.every((usedHue) => circularHueDistance(usedHue, hue) >= CONTROLLER_HUE_MIN_DISTANCE)
 		) {
 			return hue;
 		}
@@ -200,6 +198,9 @@ function initBoids(width: number, height: number): Boid[] {
 			y: Math.random() * height,
 			vx: Math.cos(angle) * speed,
 			vy: Math.sin(angle) * speed,
+			sweepPhase: Math.random() * Math.PI * 2,
+			sweepRate: lerp(SWEEP_RATE_MIN, SWEEP_RATE_MAX, Math.random()),
+			sweepForce: STEER_FORCE * lerp(0.7, 1 + SWEEP_FORCE_VARIATION, Math.random()),
 			excitedTurnDirection: 0,
 			excitedTurnFramesRemaining: 0,
 			excitedTurnCooldownFramesRemaining: 0,
@@ -219,7 +220,9 @@ function setBoidExcitement(boidId: string, value: number) {
 function assignClientToBoids(clientId: string): string[] {
 	const existing = controllers.get(clientId);
 	if (existing) return existing.boidIds;
-	const claimed = new Set(Array.from(controllers.values()).flatMap((controller) => controller.boidIds));
+	const claimed = new Set(
+		Array.from(controllers.values()).flatMap((controller) => controller.boidIds)
+	);
 	const controllerHue = createUniqueControllerHue();
 	const boidIds = boids
 		.filter((boid) => !claimed.has(boid.id))
@@ -266,64 +269,52 @@ function updateBoids() {
 		b.excitement += (excitementTarget - b.excitement) * EXCITEMENT_EASE;
 
 		const excitement = b.excitement;
-		const steerForce = STEER_FORCE * (1 + excitement * EXCITE_STEER_BOOST);
 		const maxSpeed = MAX_SPEED + excitement * EXCITE_SPEED_BOOST;
 		const minSpeed = MIN_SPEED + excitement * EXCITE_SPEED_BOOST * 0.2;
-		const separationWeight = SEP_WEIGHT * (1 + excitement * EXCITE_SEPARATION_BOOST);
-		const flockInfluence =
-			excitement >= EXCITE_FLOCK_BREAK_THRESHOLD
-				? 0
-				: 1 - excitement / EXCITE_FLOCK_BREAK_THRESHOLD;
-		const alignmentWeight = ALI_WEIGHT * flockInfluence;
-		const cohesionWeight = COH_WEIGHT * flockInfluence;
+		const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+		const normX = speed > 0 ? b.vx / speed : 1;
+		const normY = speed > 0 ? b.vy / speed : 0;
+		const sweepTurn = Math.sin(b.sweepPhase);
+		const sweepForce = b.sweepForce * (1 + excitement * EXCITE_STEER_BOOST);
+		let steerX = -normY * sweepTurn * sweepForce;
+		let steerY = normX * sweepTurn * sweepForce;
+		b.sweepPhase += b.sweepRate * (1 + excitement * 0.35);
 
-		let sepX = 0, sepY = 0, sepCount = 0;
-		let aliX = 0, aliY = 0, aliCount = 0;
-		let cohX = 0, cohY = 0, cohCount = 0;
-
-		for (const n of boids) {
-			if (n === b) continue;
-			let dx = n.x - b.x;
-			let dy = n.y - b.y;
-			if (dx > w / 2) dx -= w; else if (dx < -w / 2) dx += w;
-			if (dy > h / 2) dy -= h; else if (dy < -h / 2) dy += h;
-			const dist = Math.sqrt(dx * dx + dy * dy);
-			if (dist < SEP_RADIUS && dist > 0) { sepX -= dx / dist; sepY -= dy / dist; sepCount++; }
-			if (dist < ALI_RADIUS) { aliX += n.vx; aliY += n.vy; aliCount++; }
-			if (dist < COH_RADIUS) { cohX += n.x; cohY += n.y; cohCount++; }
-		}
-
-		let steerX = 0, steerY = 0;
-		if (sepCount > 0) { const m = Math.sqrt(sepX*sepX+sepY*sepY); if (m>0) { steerX+=(sepX/m)*steerForce*separationWeight; steerY+=(sepY/m)*steerForce*separationWeight; } }
-		if (aliCount > 0 && alignmentWeight > 0) { const ax=aliX/aliCount-b.vx, ay=aliY/aliCount-b.vy, m=Math.sqrt(ax*ax+ay*ay); if (m>0) { steerX+=(ax/m)*steerForce*alignmentWeight; steerY+=(ay/m)*steerForce*alignmentWeight; } }
-		if (cohCount > 0 && cohesionWeight > 0) { const cx=cohX/cohCount-b.x, cy=cohY/cohCount-b.y, m=Math.sqrt(cx*cx+cy*cy); if (m>0) { steerX+=(cx/m)*steerForce*cohesionWeight; steerY+=(cy/m)*steerForce*cohesionWeight; } }
 		const excitedTurn = computeExcitedTurnSteering(
 			{ vx: b.vx, vy: b.vy },
 			{
 				excitement,
 				turnState: {
-						direction: b.excitedTurnDirection,
-						framesRemaining: b.excitedTurnFramesRemaining,
-						cooldownFramesRemaining: b.excitedTurnCooldownFramesRemaining
-					},
-					randomValue: Math.random()
-				}
-			);
+					direction: b.excitedTurnDirection,
+					framesRemaining: b.excitedTurnFramesRemaining,
+					cooldownFramesRemaining: b.excitedTurnCooldownFramesRemaining
+				},
+				randomValue: Math.random()
+			}
+		);
 		b.excitedTurnDirection = excitedTurn.nextTurnState.direction;
 		b.excitedTurnFramesRemaining = excitedTurn.nextTurnState.framesRemaining;
-		b.excitedTurnCooldownFramesRemaining =
-			excitedTurn.nextTurnState.cooldownFramesRemaining ?? 0;
+		b.excitedTurnCooldownFramesRemaining = excitedTurn.nextTurnState.cooldownFramesRemaining ?? 0;
 		steerX += excitedTurn.steerX;
 		steerY += excitedTurn.steerY;
 
-		b.vx += steerX; b.vy += steerY;
-		const speed = Math.sqrt(b.vx*b.vx+b.vy*b.vy);
-		const excitedMinSpeed = Math.max(minSpeed, excitedTurn.desiredSpeed * (0.76 + excitement * 0.08));
+		b.vx += steerX;
+		b.vy += steerY;
+		const nextSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+		const excitedMinSpeed = Math.max(
+			minSpeed,
+			excitedTurn.desiredSpeed * (0.76 + excitement * 0.08)
+		);
 		const targetMinSpeed = excitement > 0.03 ? excitedMinSpeed : minSpeed;
-		if (speed > maxSpeed) { b.vx=(b.vx/speed)*maxSpeed; b.vy=(b.vy/speed)*maxSpeed; }
-		else if (speed < targetMinSpeed && speed > 0) { b.vx=(b.vx/speed)*targetMinSpeed; b.vy=(b.vy/speed)*targetMinSpeed; }
-		b.x = ((b.x + b.vx) % w + w) % w;
-		b.y = ((b.y + b.vy) % h + h) % h;
+		if (nextSpeed > maxSpeed) {
+			b.vx = (b.vx / nextSpeed) * maxSpeed;
+			b.vy = (b.vy / nextSpeed) * maxSpeed;
+		} else if (nextSpeed < targetMinSpeed && nextSpeed > 0) {
+			b.vx = (b.vx / nextSpeed) * targetMinSpeed;
+			b.vy = (b.vy / nextSpeed) * targetMinSpeed;
+		}
+		b.x = (((b.x + b.vx) % w) + w) % w;
+		b.y = (((b.y + b.vy) % h) + h) % h;
 	}
 }
 
@@ -384,7 +375,10 @@ if (typeof self !== 'undefined') {
 			case 'resize':
 				w = msg.w;
 				h = msg.h;
-				if (canvas) { canvas.width = w; canvas.height = h; }
+				if (canvas) {
+					canvas.width = w;
+					canvas.height = h;
+				}
 				break;
 			case 'setClientExcitement':
 				setClientExcitement(msg.clientId, msg.value);
