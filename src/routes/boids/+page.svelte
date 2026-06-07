@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { createNoise3D } from 'simplex-noise';
 
 	type Boid = { x: number; y: number; vx: number; vy: number };
 
@@ -16,12 +17,21 @@
 	const TRI_LENGTH = 14;
 	const TRI_HALF_BASE = 5;
 
+	// Flow field
+	const FLOW_SCALE = 0.0015;   // spatial frequency — lower = larger swirling structures
+	const FLOW_SPEED = 0.0003;   // how fast the field evolves over time
+	const FLOW_WEIGHT = 0.6;     // influence relative to flocking rules
+	const FLOW_SPACING = 50;     // px between visualisation arrows
+
+	const noise3D = createNoise3D();
+
 	let canvasEl = $state<HTMLCanvasElement | undefined>();
 
 	let boids: Boid[] = [];
 	let rafId: number;
 	let w = 0;
 	let h = 0;
+	let t = 0;
 
 	function initBoids(width: number, height: number): Boid[] {
 		return Array.from({ length: BOID_COUNT }, () => {
@@ -103,6 +113,12 @@
 				}
 			}
 
+			// Flow field nudge — boids curl with the evolving noise field
+			const flowAngle =
+				noise3D(b.x * FLOW_SCALE, b.y * FLOW_SCALE, t * FLOW_SPEED) * Math.PI * 2;
+			steerX += Math.cos(flowAngle) * STEER_FORCE * FLOW_WEIGHT;
+			steerY += Math.sin(flowAngle) * STEER_FORCE * FLOW_WEIGHT;
+
 			b.vx += steerX;
 			b.vy += steerY;
 
@@ -121,6 +137,23 @@
 			b.x = ((b.x % w) + w) % w;
 			b.y = ((b.y % h) + h) % h;
 		}
+	}
+
+	function drawFlowField(ctx: CanvasRenderingContext2D) {
+		const s = FLOW_SPACING;
+		ctx.beginPath();
+		ctx.strokeStyle = 'rgba(99, 210, 255, 0.07)';
+		ctx.lineWidth = 0.7;
+		for (let x = s / 2; x < w; x += s) {
+			for (let y = s / 2; y < h; y += s) {
+				const angle =
+					noise3D(x * FLOW_SCALE, y * FLOW_SCALE, t * FLOW_SPEED) * Math.PI * 2;
+				const len = 10;
+				ctx.moveTo(x, y);
+				ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+			}
+		}
+		ctx.stroke();
 	}
 
 	function drawBoid(ctx: CanvasRenderingContext2D, b: Boid) {
@@ -145,9 +178,12 @@
 		const ctx = canvasEl.getContext('2d');
 		if (!ctx) return;
 
+		t += 1;
+
 		ctx.fillStyle = 'rgba(10, 10, 15, 0.25)';
 		ctx.fillRect(0, 0, w, h);
 
+		drawFlowField(ctx);
 		updateBoids();
 		for (const b of boids) drawBoid(ctx, b);
 
