@@ -11,6 +11,7 @@
 		computeRelativeHandY,
 		type Landmark
 	} from '$lib/body-relative';
+	import { onMount } from 'svelte';
 	import Boids from '$lib/Boids.svelte';
 	import PeerModal from '$lib/PeerModal.svelte';
 	import { peerStore } from '$lib/peerStore.svelte';
@@ -31,6 +32,7 @@
 
 	let boidsEnabled = $state(false);
 	let peerModalOpen = $state(false);
+	let gradientHue = $state(0);
 	const avgExcitement = $derived(
 		(() => {
 			const peers = Object.values(peerStore.peers);
@@ -900,6 +902,20 @@
 		status = '';
 		resetTrackingState();
 	}
+
+	onMount(() => {
+		let last = performance.now();
+		let hueRafId: number;
+		function animateHue(now: number) {
+			const dt = (now - last) / 1000;
+			last = now;
+			// 8 deg/sec at rest, up to 200 deg/sec at full excitement
+			gradientHue = (gradientHue + (8 + avgExcitement * 192) * dt) % 360;
+			hueRafId = requestAnimationFrame(animateHue);
+		}
+		hueRafId = requestAnimationFrame(animateHue);
+		return () => cancelAnimationFrame(hueRafId);
+	});
 </script>
 
 {#if boidsEnabled}
@@ -908,7 +924,7 @@
 
 <div
 	class="flex h-screen overflow-hidden"
-	style="background: radial-gradient(ellipse {avgExcitement * 150}% {avgExcitement * 150}% at 50% 100%, rgba(6, 182, 212, {avgExcitement * 0.35}) 0%, transparent 70%) {boidsEnabled ? 'transparent' : '#09090b'}"
+	style="background: radial-gradient(ellipse {avgExcitement * 150}% {avgExcitement * 150}% at 50% 100%, hsla({gradientHue}, 80%, 60%, {avgExcitement * 0.5}) 0%, transparent 70%) {boidsEnabled ? 'transparent' : '#09090b'}"
 >
 	<!-- main area -->
 	<div class="flex min-w-0 flex-1 flex-col items-center justify-center gap-6 p-8">
