@@ -7,9 +7,6 @@
 	} from '@mediapipe/tasks-vision';
 	import {
 		clamp01,
-		computeFootPoint,
-		computeRelativeFootX,
-		computeRelativeFootY,
 		computeRelativeHandX,
 		computeRelativeHandY,
 		type Landmark
@@ -28,12 +25,6 @@
 	const LEFT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	const RIGHT_HAND_ENERGY_LANDMARKS = Array.from({ length: 21 }, (_, i) => i);
 	const POSE_WRIST_ENERGY_LANDMARKS = [0];
-	const LEFT_ANKLE = 27;
-	const RIGHT_ANKLE = 28;
-	const LEFT_HEEL = 29;
-	const RIGHT_HEEL = 30;
-	const LEFT_FOOT_INDEX = 31;
-	const RIGHT_FOOT_INDEX = 32;
 	// fingertips only: [4, 8, 12, 16, 20]
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
@@ -102,10 +93,6 @@
 		{ name: 'Left Hand Y', type: 'cc', number: 2, value: 0 },
 		{ name: 'Right Hand X', type: 'cc', number: 3, value: 0 },
 		{ name: 'Right Hand Y', type: 'cc', number: 4, value: 0 },
-		{ name: 'Left Foot X', type: 'cc', number: 5, value: 0 },
-		{ name: 'Left Foot Y', type: 'cc', number: 6, value: 0 },
-		{ name: 'Right Foot X', type: 'cc', number: 7, value: 0 },
-		{ name: 'Right Foot Y', type: 'cc', number: 8, value: 0 },
 		{ name: 'Left Hand Energy', type: 'cc', number: 9, value: 0 },
 		{ name: 'Right Hand Energy', type: 'cc', number: 10, value: 0 },
 		{ name: 'Left Hand Openness', type: 'cc', number: 11, value: 0 },
@@ -660,16 +647,6 @@
 				currentPoseLandmarks = landmarks;
 				drawConnections(ctx, landmarks, PoseLandmarker.POSE_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 3, w, h);
-				const leftFootLandmarks = [
-					landmarks[LEFT_ANKLE],
-					landmarks[LEFT_HEEL],
-					landmarks[LEFT_FOOT_INDEX]
-				];
-				const rightFootLandmarks = [
-					landmarks[RIGHT_ANKLE],
-					landmarks[RIGHT_HEEL],
-					landmarks[RIGHT_FOOT_INDEX]
-				];
 				leftPoseWrist = landmarks[15];
 				rightPoseWrist = landmarks[16];
 				poseScale = computePoseScale(landmarks);
@@ -688,50 +665,6 @@
 				if (lRaised !== prevLeftArmRaised) {
 					setNoteValue('Left Arm', lRaised, true);
 					prevLeftArmRaised = lRaised;
-				}
-
-				const leftFoot = leftFootLandmarks.some(Boolean)
-					? computeFootPoint(landmarks, 'left')
-					: undefined;
-				const rightFoot = rightFootLandmarks.some(Boolean)
-					? computeFootPoint(landmarks, 'right')
-					: undefined;
-				const leftFootOnScreen = isLandmarkOnScreen(leftFoot, 0.08);
-				const rightFootOnScreen = isLandmarkOnScreen(rightFoot, 0.08);
-
-				const leftFootX =
-					leftFoot && leftFootOnScreen ? computeRelativeFootX(leftFoot, landmarks) : 0;
-				const leftFootY =
-					leftFoot && leftFootOnScreen ? computeRelativeFootY(leftFoot, landmarks) : 0;
-				const rightFootX =
-					rightFoot && rightFootOnScreen ? computeRelativeFootX(rightFoot, landmarks) : 0;
-				const rightFootY =
-					rightFoot && rightFootOnScreen ? computeRelativeFootY(rightFoot, landmarks) : 0;
-				setCcValue('Left Foot X', leftFootX);
-				setCcValue('Left Foot Y', leftFootY);
-				setCcValue('Right Foot X', rightFootX);
-				setCcValue('Right Foot Y', rightFootY);
-
-				if (shouldSendMidi) {
-					setCcValue('Left Foot X', leftFootX, true);
-					setCcValue('Left Foot Y', leftFootY, true);
-					setCcValue('Right Foot X', rightFootX, true);
-					setCcValue('Right Foot Y', rightFootY, true);
-					sentMidiThisFrame = true;
-				}
-			}
-
-			if (!currentPoseLandmarks) {
-				setCcValue('Left Foot X', 0);
-				setCcValue('Left Foot Y', 0);
-				setCcValue('Right Foot X', 0);
-				setCcValue('Right Foot Y', 0);
-				if (shouldSendMidi) {
-					setCcValue('Left Foot X', 0, true);
-					setCcValue('Left Foot Y', 0, true);
-					setCcValue('Right Foot X', 0, true);
-					setCcValue('Right Foot Y', 0, true);
-					sentMidiThisFrame = true;
 				}
 			}
 

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import QRCode from 'qrcode';
-	import Peer from 'peerjs';
+	import Peer, { type DataConnection } from 'peerjs';
 	import { peerStore, type Orientation } from './peerStore.svelte.ts';
 	import { getIceServers } from './iceServers.ts';
 
@@ -14,12 +14,23 @@
 	}
 
 	const BACKEND_URL = 'ws://localhost:8765';
+	const PEER_STALE_MS = 4000;
 
 	const joinCode = generateCode();
 	let qrDataUrl = $state('');
-	let connectedPeers = $state(0);
 	let peer: Peer | null = null;
 	let ws: WebSocket | null = null;
+	const connections = new Map<string, DataConnection>();
+	const lastSentBoidHues = new Map<string, number | null>();
+
+	function sendPeerVisualState(peerId: string) {
+		const conn = connections.get(peerId);
+		if (!conn?.open) return;
+		const boidHue = peerStore.peers[peerId]?.boidHue ?? null;
+		if (lastSentBoidHues.get(peerId) === boidHue) return;
+		conn.send({ type: 'peer-visual-state', boidHue });
+		lastSentBoidHues.set(peerId, boidHue);
+	}
 
 	function fmt(n: number | null): string {
 		return n == null ? '--' : n.toFixed(1).padStart(7);
@@ -40,12 +51,42 @@
 		const iceServers = await getIceServers();
 		peer = new Peer(joinCode, iceServers.length ? { config: { iceServers } } : {});
 		peer.on('connection', (conn) => {
-			connectedPeers++;
+			connections.set(conn.peer, conn);
+			peerStore.ensurePeer(conn.peer);
+			conn.on('open', () => {
+				peerStore.touch(conn.peer);
+				sendPeerVisualState(conn.peer);
+			});
 			conn.on('data', (raw) => {
-				peerStore.update(conn.peer, raw as Orientation);
+				if (
+					raw != null &&
+					typeof raw === 'object' &&
+					'type' in raw &&
+					raw.type === 'orientation'
+				) {
+					const message = raw as {
+						type: 'orientation';
+						alpha: number | null;
+						beta: number | null;
+						gamma: number | null;
+					};
+					peerStore.update(conn.peer, {
+						alpha: message.alpha,
+						beta: message.beta,
+						gamma: message.gamma
+					} as Orientation);
+				} else if (
+					raw != null &&
+					typeof raw === 'object' &&
+					'type' in raw &&
+					raw.type === 'peer-presence'
+				) {
+					peerStore.touch(conn.peer);
+				}
 			});
 			conn.on('close', () => {
-				connectedPeers = Math.max(0, connectedPeers - 1);
+				connections.delete(conn.peer);
+				lastSentBoidHues.delete(conn.peer);
 				peerStore.remove(conn.peer);
 			});
 		});
@@ -75,15 +116,42 @@
 		return () => clearInterval(pollId);
 	});
 
+	onMount(() => {
+		const pruneId = setInterval(() => {
+			const now = performance.now();
+			for (const [peerId, peerState] of Object.entries(peerStore.peers)) {
+				if (now - peerState.lastUpdatedAt <= PEER_STALE_MS) continue;
+				connections.get(peerId)?.close();
+				connections.delete(peerId);
+				lastSentBoidHues.delete(peerId);
+				peerStore.remove(peerId);
+			}
+		}, 1000);
+		return () => clearInterval(pruneId);
+	});
+
+	$effect(() => {
+		for (const peerId of connections.keys()) {
+			sendPeerVisualState(peerId);
+		}
+	});
+
 	onDestroy(() => {
 		ws?.close();
 		ws = null;
 		peer?.destroy();
 		peer = null;
+		connections.clear();
+		lastSentBoidHues.clear();
 		peerStore.clear();
 	});
 
-	const orientationEntries = $derived(Object.entries(peerStore.peers));
+	const orientationEntries = $derived(
+		Object.entries(peerStore.peers).filter(
+			([, peerState]) => performance.now() - peerState.lastUpdatedAt <= PEER_STALE_MS
+		)
+	);
+	const connectedPeers = $derived(orientationEntries.length);
 </script>
 
 {#if open}

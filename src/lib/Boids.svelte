@@ -11,15 +11,36 @@
 		worker?.postMessage({ type: 'setClientExcitement', clientId, value });
 	}
 
+	export function ensureClientAssignment(clientId: string) {
+		worker?.postMessage({ type: 'ensureClientAssignment', clientId });
+	}
+
 	export function setBoidExcitement(boidId: string, value: number) {
 		worker?.postMessage({ type: 'setBoidExcitement', boidId, value });
 	}
 
+	export function releaseClient(clientId: string) {
+		worker?.postMessage({ type: 'releaseClient', clientId });
+	}
+
 	let worker: Worker | null = null;
 	let forwardedPeerIds = new Set<string>();
+	
+	// Performance optimization: Track last sent values to deduplicate updates
+	let lastSentExcitement = new Map<string, number>();
+	const EXCITEMENT_CHANGE_THRESHOLD = 0.03; // Only update if changed by >3%
 
 	onMount(() => {
 		worker = new BoidsWorker();
+		worker.onmessage = (event: MessageEvent) => {
+			const message = event.data;
+			if (message?.type === 'controllerVisualState' && typeof message.clientId === 'string') {
+				peerStore.setBoidHue(
+					message.clientId,
+					typeof message.boidHue === 'number' ? message.boidHue : null
+				);
+			}
+		};
 
 		const offscreen = canvasEl!.transferControlToOffscreen();
 		worker.postMessage(
@@ -47,6 +68,7 @@
 			worker?.terminate();
 			worker = null;
 			forwardedPeerIds.clear();
+			lastSentExcitement.clear();
 		};
 	});
 
@@ -55,20 +77,33 @@
 
 		for (const peerId of forwardedPeerIds) {
 			if (!currentPeerIds.has(peerId)) {
-				setClientExcitement(peerId, 0);
+				releaseClient(peerId);
 				forwardedPeerIds.delete(peerId);
+				lastSentExcitement.delete(peerId);
 			}
 		}
 
 		for (const [peerId, peerState] of Object.entries(peerStore.peers)) {
-			setClientExcitement(peerId, peerState.energy);
-			forwardedPeerIds.add(peerId);
+			// Only send ensureClientAssignment if client is new
+			if (!forwardedPeerIds.has(peerId)) {
+				ensureClientAssignment(peerId);
+				forwardedPeerIds.add(peerId);
+				lastSentExcitement.set(peerId, peerState.energy);
+				setClientExcitement(peerId, peerState.energy);
+			} else {
+				// Only update excitement if it changed significantly
+				const lastExcitement = lastSentExcitement.get(peerId) ?? -1;
+				if (Math.abs(peerState.energy - lastExcitement) > EXCITEMENT_CHANGE_THRESHOLD) {
+					setClientExcitement(peerId, peerState.energy);
+					lastSentExcitement.set(peerId, peerState.energy);
+				}
+			}
 		}
 	});
 
 	onDestroy(() => {
 		for (const peerId of forwardedPeerIds) {
-			setClientExcitement(peerId, 0);
+			releaseClient(peerId);
 		}
 		forwardedPeerIds.clear();
 	});

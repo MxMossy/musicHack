@@ -8,6 +8,7 @@
 	let status = $state<'connecting' | 'connected' | 'error'>('connecting');
 	let needsPermission = $state(false);
 	let orientation = $state<{ alpha: number | null; beta: number | null; gamma: number | null } | null>(null);
+	let boidHue = $state<number | null>(null);
 	let peer: Peer | null = null;
 	let conn: DataConnection | null = null;
 	let lastSend = 0;
@@ -17,6 +18,7 @@
 	let wakeLockError = $state('');
 	let reconnecting = false;
 	let wakeLock: WakeLockSentinel | null = null;
+	let presenceIntervalId: ReturnType<typeof setInterval> | null = null;
 
 	type WakeLockSentinel = {
 		released: boolean;
@@ -77,7 +79,24 @@
 		const now = performance.now();
 		if (now - lastSend < 50) return; // ~20fps
 		lastSend = now;
-		conn.send({ alpha: e.alpha, beta: e.beta, gamma: e.gamma });
+		conn.send({ type: 'orientation', alpha: e.alpha, beta: e.beta, gamma: e.gamma });
+	}
+
+	function sendPresence() {
+		if (!conn?.open) return;
+		conn.send({ type: 'peer-presence' });
+	}
+
+	function startPresenceHeartbeat() {
+		stopPresenceHeartbeat();
+		sendPresence();
+		presenceIntervalId = setInterval(sendPresence, 1000);
+	}
+
+	function stopPresenceHeartbeat() {
+		if (presenceIntervalId == null) return;
+		clearInterval(presenceIntervalId);
+		presenceIntervalId = null;
 	}
 
 	async function requestWakeLock() {
@@ -156,6 +175,7 @@
 		conn.on('open', async () => {
 			status = 'connected';
 			reconnecting = false;
+			startPresenceHeartbeat();
 			// Check if we need explicit iOS permission
 			const DOE = DeviceOrientationEvent as unknown as { requestPermission?: unknown };
 			if (typeof DOE.requestPermission === 'function') {
@@ -165,12 +185,27 @@
 			}
 			await syncWakeLock();
 		});
+		conn.on('data', (raw) => {
+			if (
+				raw != null &&
+				typeof raw === 'object' &&
+				'type' in raw &&
+				raw.type === 'peer-visual-state'
+			) {
+				const message = raw as { type: 'peer-visual-state'; boidHue: number | null };
+				boidHue = typeof message.boidHue === 'number' ? message.boidHue : null;
+			}
+		});
 		conn.on('close', () => {
 			conn = null;
+			boidHue = null;
+			stopPresenceHeartbeat();
 			status = 'connecting';
 			void syncWakeLock();
 		});
 		conn.on('error', () => {
+			boidHue = null;
+			stopPresenceHeartbeat();
 			status = 'error';
 			void syncWakeLock();
 		});
@@ -225,6 +260,7 @@
 	onDestroy(() => {
 		document.removeEventListener('visibilitychange', resumePhoneSession);
 		stopGyro();
+		stopPresenceHeartbeat();
 		void releaseWakeLock();
 		conn?.close();
 		peer?.destroy();
@@ -241,6 +277,17 @@
 		</p>
 	{:else if status === 'connected'}
 		<p class="font-mono text-[10px] tracking-widest text-green-500 uppercase">Connected</p>
+		{#if boidHue != null}
+			<div class="mt-1 flex items-center gap-2">
+				<div
+					class="h-2.5 w-2.5 rounded-full shadow-[0_0_12px_rgba(255,255,255,0.18)]"
+					style={`background-color: hsl(${boidHue} 96% 64%)`}
+				></div>
+				<p class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase">
+					Your boid
+				</p>
+			</div>
+		{/if}
 		{#if needsPermission}
 			<button
 				onclick={requestPermission}

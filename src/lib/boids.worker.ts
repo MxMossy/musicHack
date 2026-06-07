@@ -20,11 +20,12 @@ type BoidController = {
 	clientId: string;
 	boidIds: string[];
 	lastSeen: number;
+	colorHue: number;
 };
 
 const BOID_COUNT = 30;
 const ENABLE_CONTROLLER_COLORS = true;
-const CONTROLLER_BOIDS_PER_PHONE = 5;
+const CONTROLLER_BOIDS_PER_PHONE = 1;
 const MAX_SPEED = 2.5;
 const MIN_SPEED = 0.8;
 const STEER_FORCE = 0.08;
@@ -57,6 +58,15 @@ let h = 0;
 let boids: Boid[] = [];
 let controllers = new Map<string, BoidController>();
 let intervalId: ReturnType<typeof setInterval> | null = null;
+
+function emitControllerVisualState(clientId: string, boidHue: number | null) {
+	if (typeof self === 'undefined') return;
+	self.postMessage({
+		type: 'controllerVisualState',
+		clientId,
+		boidHue
+	});
+}
 
 function clamp01(v: number) {
 	return Math.max(0, Math.min(1, v));
@@ -219,7 +229,11 @@ function setBoidExcitement(boidId: string, value: number) {
 
 function assignClientToBoids(clientId: string): string[] {
 	const existing = controllers.get(clientId);
-	if (existing) return existing.boidIds;
+	if (existing) {
+		existing.lastSeen = performance.now();
+		emitControllerVisualState(clientId, existing.colorHue);
+		return existing.boidIds;
+	}
 	const claimed = new Set(
 		Array.from(controllers.values()).flatMap((controller) => controller.boidIds)
 	);
@@ -232,8 +246,18 @@ function assignClientToBoids(clientId: string): string[] {
 			return boid.id;
 		});
 	if (boidIds.length === 0) return [];
-	controllers.set(clientId, { clientId, boidIds, lastSeen: performance.now() });
+	controllers.set(clientId, {
+		clientId,
+		boidIds,
+		lastSeen: performance.now(),
+		colorHue: controllerHue
+	});
+	emitControllerVisualState(clientId, controllerHue);
 	return boidIds;
+}
+
+function ensureClientAssignment(clientId: string) {
+	assignClientToBoids(clientId);
 }
 
 function releaseClientBoid(clientId: string) {
@@ -245,6 +269,7 @@ function releaseClientBoid(clientId: string) {
 		if (boid) resetBoidColor(boid);
 	}
 	controllers.delete(clientId);
+	emitControllerVisualState(clientId, null);
 }
 
 function setClientExcitement(clientId: string, value: number) {
@@ -382,6 +407,12 @@ if (typeof self !== 'undefined') {
 				break;
 			case 'setClientExcitement':
 				setClientExcitement(msg.clientId, msg.value);
+				break;
+			case 'ensureClientAssignment':
+				ensureClientAssignment(msg.clientId);
+				break;
+			case 'releaseClient':
+				releaseClientBoid(msg.clientId);
 				break;
 			case 'setBoidExcitement':
 				setBoidExcitement(msg.boidId, msg.value);

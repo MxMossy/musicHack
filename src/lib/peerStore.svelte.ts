@@ -11,6 +11,7 @@ export type PeerMotionState = {
 	rawEnergy: number;
 	energy: number;
 	sampleCount: number;
+	boidHue: number | null;
 };
 
 const ENERGY_SMOOTHING = 0.2;
@@ -39,6 +40,29 @@ class PeerStore {
 	peers = $state<Record<string, PeerMotionState>>({});
 	orientations = $state<Record<string, Orientation>>({});
 
+	ensurePeer(peerId: string) {
+		const existing = this.peers[peerId];
+		if (existing) return;
+
+		this.peers[peerId] = {
+			orientation: { alpha: null, beta: null, gamma: null },
+			previousOrientation: null,
+			lastUpdatedAt: performance.now(),
+			rawEnergy: 0,
+			energy: 0,
+			sampleCount: 0,
+			boidHue: null
+		};
+	}
+
+	touch(peerId: string) {
+		this.ensurePeer(peerId);
+		this.peers[peerId] = {
+			...this.peers[peerId],
+			lastUpdatedAt: performance.now()
+		};
+	}
+
 	update(peerId: string, data: Orientation) {
 		const now = performance.now();
 		const existing = this.peers[peerId];
@@ -57,9 +81,18 @@ class PeerStore {
 			lastUpdatedAt: now,
 			rawEnergy,
 			energy,
-			sampleCount: (existing?.sampleCount ?? 0) + 1
+			sampleCount: (existing?.sampleCount ?? 0) + 1,
+			boidHue: existing?.boidHue ?? null
 		};
 		this.orientations[peerId] = data;
+	}
+
+	setBoidHue(peerId: string, boidHue: number | null) {
+		this.ensurePeer(peerId);
+		this.peers[peerId] = {
+			...this.peers[peerId],
+			boidHue
+		};
 	}
 
 	remove(peerId: string) {
