@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import QRCode from 'qrcode';
 	import Peer from 'peerjs';
 	import { peerStore, type Orientation } from './peerStore.svelte.ts';
 	import { getIceServers } from './iceServers.ts';
+	import { processPeerData } from './peerProcessing.ts';
 
 	let { open = $bindable(false) } = $props();
 
@@ -25,14 +26,16 @@
 		return n == null ? '--' : n.toFixed(1).padStart(7);
 	}
 
-	async function setup() {
+	async function generateQr() {
 		const url = `${window.location.origin}/peer?joincode=${joinCode}`;
 		qrDataUrl = await QRCode.toDataURL(url, {
 			width: 192,
 			margin: 2,
 			color: { dark: '#ffffff', light: '#09090b' }
 		});
+	}
 
+	async function initPeer() {
 		ws = new WebSocket(BACKEND_URL);
 
 		const iceServers = await getIceServers();
@@ -40,11 +43,7 @@
 		peer.on('connection', (conn) => {
 			connectedPeers++;
 			conn.on('data', (raw) => {
-				const data = raw as Orientation;
-				peerStore.update(conn.peer, data);
-				if (ws?.readyState === WebSocket.OPEN) {
-					ws.send(JSON.stringify({ peerId: conn.peer, ...data }));
-				}
+				peerStore.update(conn.peer, raw as Orientation);
 			});
 			conn.on('close', () => {
 				connectedPeers = Math.max(0, connectedPeers - 1);
@@ -53,22 +52,30 @@
 		});
 	}
 
-	function teardown() {
+	onMount(() => {
+		generateQr();
+		initPeer();
+	});
+
+	$effect(() => {
+		if (!open) qrDataUrl = '';
+		else if (!qrDataUrl) generateQr();
+	});
+
+	$effect(() => {
+		const nodes = processPeerData(peerStore.orientations);
+		if (ws?.readyState === WebSocket.OPEN) {
+			ws.send(JSON.stringify(nodes));
+		}
+	});
+
+	onDestroy(() => {
 		ws?.close();
 		ws = null;
 		peer?.destroy();
 		peer = null;
-		connectedPeers = 0;
-		qrDataUrl = '';
 		peerStore.clear();
-	}
-
-	$effect(() => {
-		if (open) setup();
-		else teardown();
 	});
-
-	onDestroy(teardown);
 
 	const orientationEntries = $derived(Object.entries(peerStore.orientations));
 </script>
