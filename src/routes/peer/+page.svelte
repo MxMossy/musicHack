@@ -18,6 +18,7 @@
 	let wakeLockError = $state('');
 	let reconnecting = false;
 	let wakeLock: WakeLockSentinel | null = null;
+	let presenceIntervalId: ReturnType<typeof setInterval> | null = null;
 
 	type WakeLockSentinel = {
 		released: boolean;
@@ -79,6 +80,23 @@
 		if (now - lastSend < 50) return; // ~20fps
 		lastSend = now;
 		conn.send({ type: 'orientation', alpha: e.alpha, beta: e.beta, gamma: e.gamma });
+	}
+
+	function sendPresence() {
+		if (!conn?.open) return;
+		conn.send({ type: 'peer-presence' });
+	}
+
+	function startPresenceHeartbeat() {
+		stopPresenceHeartbeat();
+		sendPresence();
+		presenceIntervalId = setInterval(sendPresence, 1000);
+	}
+
+	function stopPresenceHeartbeat() {
+		if (presenceIntervalId == null) return;
+		clearInterval(presenceIntervalId);
+		presenceIntervalId = null;
 	}
 
 	async function requestWakeLock() {
@@ -157,6 +175,7 @@
 		conn.on('open', async () => {
 			status = 'connected';
 			reconnecting = false;
+			startPresenceHeartbeat();
 			// Check if we need explicit iOS permission
 			const DOE = DeviceOrientationEvent as unknown as { requestPermission?: unknown };
 			if (typeof DOE.requestPermission === 'function') {
@@ -180,11 +199,13 @@
 		conn.on('close', () => {
 			conn = null;
 			boidHue = null;
+			stopPresenceHeartbeat();
 			status = 'connecting';
 			void syncWakeLock();
 		});
 		conn.on('error', () => {
 			boidHue = null;
+			stopPresenceHeartbeat();
 			status = 'error';
 			void syncWakeLock();
 		});
@@ -239,6 +260,7 @@
 	onDestroy(() => {
 		document.removeEventListener('visibilitychange', resumePhoneSession);
 		stopGyro();
+		stopPresenceHeartbeat();
 		void releaseWakeLock();
 		conn?.close();
 		peer?.destroy();

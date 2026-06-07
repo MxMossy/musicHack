@@ -55,6 +55,14 @@ class PeerStore {
 		};
 	}
 
+	touch(peerId: string) {
+		this.ensurePeer(peerId);
+		this.peers[peerId] = {
+			...this.peers[peerId],
+			lastUpdatedAt: performance.now()
+		};
+	}
+
 	update(peerId: string, data: Orientation) {
 		const now = performance.now();
 		const existing = this.peers[peerId];

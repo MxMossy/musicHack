@@ -14,10 +14,10 @@
 	}
 
 	const BACKEND_URL = 'ws://localhost:8765';
+	const PEER_STALE_MS = 4000;
 
 	const joinCode = generateCode();
 	let qrDataUrl = $state('');
-	let connectedPeers = $state(0);
 	let peer: Peer | null = null;
 	let ws: WebSocket | null = null;
 	const connections = new Map<string, DataConnection>();
@@ -51,10 +51,10 @@
 		const iceServers = await getIceServers();
 		peer = new Peer(joinCode, iceServers.length ? { config: { iceServers } } : {});
 		peer.on('connection', (conn) => {
-			connectedPeers++;
 			connections.set(conn.peer, conn);
 			peerStore.ensurePeer(conn.peer);
 			conn.on('open', () => {
+				peerStore.touch(conn.peer);
 				sendPeerVisualState(conn.peer);
 			});
 			conn.on('data', (raw) => {
@@ -75,10 +75,16 @@
 						beta: message.beta,
 						gamma: message.gamma
 					} as Orientation);
+				} else if (
+					raw != null &&
+					typeof raw === 'object' &&
+					'type' in raw &&
+					raw.type === 'peer-presence'
+				) {
+					peerStore.touch(conn.peer);
 				}
 			});
 			conn.on('close', () => {
-				connectedPeers = Math.max(0, connectedPeers - 1);
 				connections.delete(conn.peer);
 				lastSentBoidHues.delete(conn.peer);
 				peerStore.remove(conn.peer);
@@ -110,6 +116,20 @@
 		return () => clearInterval(pollId);
 	});
 
+	onMount(() => {
+		const pruneId = setInterval(() => {
+			const now = performance.now();
+			for (const [peerId, peerState] of Object.entries(peerStore.peers)) {
+				if (now - peerState.lastUpdatedAt <= PEER_STALE_MS) continue;
+				connections.get(peerId)?.close();
+				connections.delete(peerId);
+				lastSentBoidHues.delete(peerId);
+				peerStore.remove(peerId);
+			}
+		}, 1000);
+		return () => clearInterval(pruneId);
+	});
+
 	$effect(() => {
 		for (const peerId of connections.keys()) {
 			sendPeerVisualState(peerId);
@@ -126,7 +146,12 @@
 		peerStore.clear();
 	});
 
-	const orientationEntries = $derived(Object.entries(peerStore.peers));
+	const orientationEntries = $derived(
+		Object.entries(peerStore.peers).filter(
+			([, peerState]) => performance.now() - peerState.lastUpdatedAt <= PEER_STALE_MS
+		)
+	);
+	const connectedPeers = $derived(orientationEntries.length);
 </script>
 
 {#if open}

@@ -11,8 +11,16 @@
 		worker?.postMessage({ type: 'setClientExcitement', clientId, value });
 	}
 
+	export function ensureClientAssignment(clientId: string) {
+		worker?.postMessage({ type: 'ensureClientAssignment', clientId });
+	}
+
 	export function setBoidExcitement(boidId: string, value: number) {
 		worker?.postMessage({ type: 'setBoidExcitement', boidId, value });
+	}
+
+	export function releaseClient(clientId: string) {
+		worker?.postMessage({ type: 'releaseClient', clientId });
 	}
 
 	let worker: Worker | null = null;
@@ -64,12 +72,13 @@
 
 		for (const peerId of forwardedPeerIds) {
 			if (!currentPeerIds.has(peerId)) {
-				setClientExcitement(peerId, 0);
+				releaseClient(peerId);
 				forwardedPeerIds.delete(peerId);
 			}
 		}
 
 		for (const [peerId, peerState] of Object.entries(peerStore.peers)) {
+			ensureClientAssignment(peerId);
 			setClientExcitement(peerId, peerState.energy);
 			forwardedPeerIds.add(peerId);
 		}
@@ -77,7 +86,7 @@
 
 	onDestroy(() => {
 		for (const peerId of forwardedPeerIds) {
-			setClientExcitement(peerId, 0);
+			releaseClient(peerId);
 		}
 		forwardedPeerIds.clear();
 	});

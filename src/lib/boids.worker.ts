@@ -229,7 +229,11 @@ function setBoidExcitement(boidId: string, value: number) {
 
 function assignClientToBoids(clientId: string): string[] {
 	const existing = controllers.get(clientId);
-	if (existing) return existing.boidIds;
+	if (existing) {
+		existing.lastSeen = performance.now();
+		emitControllerVisualState(clientId, existing.colorHue);
+		return existing.boidIds;
+	}
 	const claimed = new Set(
 		Array.from(controllers.values()).flatMap((controller) => controller.boidIds)
 	);
@@ -250,6 +254,10 @@ function assignClientToBoids(clientId: string): string[] {
 	});
 	emitControllerVisualState(clientId, controllerHue);
 	return boidIds;
+}
+
+function ensureClientAssignment(clientId: string) {
+	assignClientToBoids(clientId);
 }
 
 function releaseClientBoid(clientId: string) {
@@ -399,6 +407,12 @@ if (typeof self !== 'undefined') {
 				break;
 			case 'setClientExcitement':
 				setClientExcitement(msg.clientId, msg.value);
+				break;
+			case 'ensureClientAssignment':
+				ensureClientAssignment(msg.clientId);
+				break;
+			case 'releaseClient':
+				releaseClientBoid(msg.clientId);
 				break;
 			case 'setBoidExcitement':
 				setBoidExcitement(msg.boidId, msg.value);
