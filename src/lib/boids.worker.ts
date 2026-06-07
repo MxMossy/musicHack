@@ -30,6 +30,7 @@ const COH_WEIGHT = 1.0;
 const STEER_FORCE = 0.08;
 const TRI_LENGTH = 14;
 const TRI_HALF_BASE = 5;
+const TRI_CENTER_X = TRI_LENGTH / 3;
 const EXCITABILITY_MIN = 0.45;
 const EXCITABILITY_MAX = 1.8;
 const EXCITEMENT_EASE = 0.08;
@@ -37,8 +38,7 @@ const EXCITE_STEER_BOOST = 0.55;
 const EXCITE_SPEED_BOOST = 1.35;
 const EXCITE_JITTER_FORCE = 0.08;
 const EXCITE_SEPARATION_BOOST = 1.8;
-const EXCITE_ALIGNMENT_FADE = 1.2;
-const EXCITE_COHESION_FADE = 1.35;
+const EXCITE_FLOCK_BREAK_THRESHOLD = 0.45;
 const CONTROLLER_TIMEOUT_MS = 3000;
 const DEFAULT_BOID_HUE = 196;
 const CONTROLLER_HUE_MIN_DISTANCE = 24;
@@ -82,9 +82,9 @@ function createUniqueControllerHue(excludeBoidId?: string): number {
 	return Math.floor(Math.random() * 360);
 }
 
-function applyControllerColor(boid: Boid) {
+function applyControllerColor(boid: Boid, hue: number) {
 	if (!ENABLE_CONTROLLER_COLORS) return;
-	boid.colorHue = createUniqueControllerHue(boid.id);
+	boid.colorHue = hue;
 }
 
 function resetBoidColor(boid: Boid) {
@@ -118,11 +118,12 @@ function assignClientToBoids(clientId: string): string[] {
 	const existing = controllers.get(clientId);
 	if (existing) return existing.boidIds;
 	const claimed = new Set(Array.from(controllers.values()).flatMap((controller) => controller.boidIds));
+	const controllerHue = createUniqueControllerHue();
 	const boidIds = boids
 		.filter((boid) => !claimed.has(boid.id))
 		.slice(0, Math.max(0, CONTROLLER_BOIDS_PER_PHONE))
 		.map((boid) => {
-			applyControllerColor(boid);
+			applyControllerColor(boid, controllerHue);
 			return boid.id;
 		});
 	if (boidIds.length === 0) return [];
@@ -167,8 +168,12 @@ function updateBoids() {
 		const maxSpeed = MAX_SPEED + excitement * EXCITE_SPEED_BOOST;
 		const minSpeed = MIN_SPEED + excitement * EXCITE_SPEED_BOOST * 0.2;
 		const separationWeight = SEP_WEIGHT * (1 + excitement * EXCITE_SEPARATION_BOOST);
-		const alignmentWeight = ALI_WEIGHT * Math.max(0, 1 - excitement * EXCITE_ALIGNMENT_FADE);
-		const cohesionWeight = COH_WEIGHT * Math.max(0, 1 - excitement * EXCITE_COHESION_FADE);
+		const flockInfluence =
+			excitement >= EXCITE_FLOCK_BREAK_THRESHOLD
+				? 0
+				: 1 - excitement / EXCITE_FLOCK_BREAK_THRESHOLD;
+		const alignmentWeight = ALI_WEIGHT * flockInfluence;
+		const cohesionWeight = COH_WEIGHT * flockInfluence;
 
 		let sepX = 0, sepY = 0, sepCount = 0;
 		let aliX = 0, aliY = 0, aliCount = 0;
@@ -214,7 +219,7 @@ function drawBoid(b: Boid) {
 	ctx.scale(sizeScale, sizeScale);
 	if (excitement > 0.08) {
 		ctx.beginPath();
-		ctx.arc(0, 0, TRI_LENGTH * (0.9 + excitement * 0.8), 0, Math.PI * 2);
+		ctx.arc(TRI_CENTER_X, 0, TRI_LENGTH * (0.9 + excitement * 0.8), 0, Math.PI * 2);
 		ctx.fillStyle = `hsla(${b.colorHue}, 100%, ${fillLightness}%, ${glowAlpha})`;
 		ctx.fill();
 	}
