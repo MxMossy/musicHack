@@ -34,7 +34,9 @@
 	const avgExcitement = $derived(
 		(() => {
 			const peers = Object.values(peerStore.peers);
-			return peers.length ? peers.reduce((s, p) => s + p.energy, 0) / peers.length : 0;
+			const val = peers.length ? peers.reduce((s, p) => s + p.energy, 0) / peers.length : 0;
+			if (peers.length) console.log('[gradient] avgExcitement:', val);
+			return val;
 		})()
 	);
 	let videoVisible = $state(true);
@@ -905,11 +907,9 @@
 {/if}
 
 <div
-	class="fixed inset-0 -z-10 pointer-events-none"
-	style="background: radial-gradient(ellipse {avgExcitement * 150}% {avgExcitement * 150}% at 50% 100%, rgba(6, 182, 212, {avgExcitement * 0.35}) 0%, transparent 70%)"
-></div>
-
-<div class="flex h-screen overflow-hidden {boidsEnabled ? '' : 'bg-zinc-950'}">
+	class="flex h-screen overflow-hidden"
+	style="background: radial-gradient(ellipse {avgExcitement * 150}% {avgExcitement * 150}% at 50% 100%, rgba(6, 182, 212, {avgExcitement * 0.35}) 0%, transparent 70%) {boidsEnabled ? 'transparent' : '#09090b'}"
+>
 	<!-- main area -->
 	<div class="flex min-w-0 flex-1 flex-col items-center justify-center gap-6 p-8">
 		<div class="flex w-full max-w-2xl items-stretch gap-3 {hasVideoSource ? '' : 'hidden'}">
