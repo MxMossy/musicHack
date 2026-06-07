@@ -23,6 +23,15 @@
 	const connections = new Map<string, DataConnection>();
 	const lastSentBoidHues = new Map<string, number | null>();
 
+	function sendPeerVisualState(peerId: string) {
+		const conn = connections.get(peerId);
+		if (!conn?.open) return;
+		const boidHue = peerStore.peers[peerId]?.boidHue ?? null;
+		if (lastSentBoidHues.get(peerId) === boidHue) return;
+		conn.send({ type: 'peer-visual-state', boidHue });
+		lastSentBoidHues.set(peerId, boidHue);
+	}
+
 	function fmt(n: number | null): string {
 		return n == null ? '--' : n.toFixed(1).padStart(7);
 	}
@@ -45,6 +54,9 @@
 			connectedPeers++;
 			connections.set(conn.peer, conn);
 			peerStore.ensurePeer(conn.peer);
+			conn.on('open', () => {
+				sendPeerVisualState(conn.peer);
+			});
 			conn.on('data', (raw) => {
 				if (
 					raw != null &&
@@ -99,12 +111,8 @@
 	});
 
 	$effect(() => {
-		for (const [peerId, conn] of connections.entries()) {
-			if (!conn.open) continue;
-			const boidHue = peerStore.peers[peerId]?.boidHue ?? null;
-			if (lastSentBoidHues.get(peerId) === boidHue) continue;
-			conn.send({ type: 'peer-visual-state', boidHue });
-			lastSentBoidHues.set(peerId, boidHue);
+		for (const peerId of connections.keys()) {
+			sendPeerVisualState(peerId);
 		}
 	});
 
