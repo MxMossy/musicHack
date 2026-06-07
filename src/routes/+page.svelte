@@ -1,5 +1,10 @@
 <script lang="ts">
-	import { FilesetResolver, GestureRecognizer, PoseLandmarker } from '@mediapipe/tasks-vision';
+	import {
+		FilesetResolver,
+		GestureRecognizer,
+		HandLandmarker,
+		PoseLandmarker
+	} from '@mediapipe/tasks-vision';
 	import {
 		clamp01,
 		computeFootPoint,
@@ -14,6 +19,8 @@
 	const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 	const POSE_MODEL =
 		'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+	const HAND_MODEL =
+		'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 	const GESTURE_MODEL =
 		'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task';
 
@@ -39,6 +46,7 @@
 	let hasVideoSource = $state(false);
 	let videoMode = $state<'camera' | 'upload' | null>(null);
 	let poseLandmarker: PoseLandmarker | undefined;
+	let handLandmarker: HandLandmarker | undefined;
 	let gestureRecognizer: GestureRecognizer | undefined;
 	let rafId: number;
 
@@ -396,14 +404,19 @@
 	}
 
 	async function initDetectors() {
-		if (poseLandmarker && gestureRecognizer) return;
+		if (poseLandmarker && handLandmarker && gestureRecognizer) return;
 		status = 'Loading models...';
 		const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
-		[poseLandmarker, gestureRecognizer] = await Promise.all([
+		[poseLandmarker, handLandmarker, gestureRecognizer] = await Promise.all([
 			PoseLandmarker.createFromOptions(vision, {
 				baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'GPU' },
 				runningMode: 'VIDEO',
 				numPoses: 1
+			}),
+			HandLandmarker.createFromOptions(vision, {
+				baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'GPU' },
+				runningMode: 'VIDEO',
+				numHands: 2
 			}),
 			GestureRecognizer.createFromOptions(vision, {
 				baseOptions: { modelAssetPath: GESTURE_MODEL, delegate: 'GPU' },
@@ -566,7 +579,7 @@
 	}
 
 	function runLoop() {
-		if (!videoEl || !canvasEl || !poseLandmarker || !gestureRecognizer || !hasVideoSource) return;
+		if (!videoEl || !canvasEl || !poseLandmarker || !handLandmarker || !gestureRecognizer || !hasVideoSource) return;
 
 		if (videoEl.readyState >= 2) {
 			const w = videoEl.videoWidth;
@@ -664,17 +677,27 @@
 				}
 			}
 
-			const hands = gestureRecognizer.recognizeForVideo(videoEl, now);
+			const hands = handLandmarker.detectForVideo(videoEl, now);
+			const gestureResults = gestureRecognizer.recognizeForVideo(videoEl, now);
 			ctx.strokeStyle = 'rgba(255,255,255,0.75)';
 			ctx.lineWidth = 1;
 			leftHandActive = false;
 			rightHandActive = false;
+			const leftGestureIndex = gestureResults.handednesses.findIndex(
+				(entry) => entry?.[0]?.categoryName === 'Left'
+			);
+			const rightGestureIndex = gestureResults.handednesses.findIndex(
+				(entry) => entry?.[0]?.categoryName === 'Right'
+			);
+			const leftGesture = leftGestureIndex >= 0 ? gestureResults.gestures[leftGestureIndex]?.[0] : undefined;
+			const rightGesture =
+				rightGestureIndex >= 0 ? gestureResults.gestures[rightGestureIndex]?.[0] : undefined;
 			for (let i = 0; i < hands.landmarks.length; i++) {
 				const landmarks = hands.landmarks[i];
-				drawConnections(ctx, landmarks, GestureRecognizer.HAND_CONNECTIONS, w, h);
+				drawConnections(ctx, landmarks, HandLandmarker.HAND_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 2.5, w, h);
 				const handedness = hands.handednesses[i]?.[0]?.categoryName;
-				const gesture = hands.gestures[i]?.[0];
+				const gesture = handedness === 'Left' ? leftGesture : handedness === 'Right' ? rightGesture : undefined;
 				const gestureName = gesture?.categoryName as HandGestureName | undefined;
 				const gestureScore = gesture?.score ?? 0;
 				if (handedness === 'Left') {
