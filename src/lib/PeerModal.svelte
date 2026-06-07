@@ -4,7 +4,6 @@
 	import Peer from 'peerjs';
 	import { peerStore, type Orientation } from './peerStore.svelte.ts';
 	import { getIceServers } from './iceServers.ts';
-	import { processPeerData } from './peerProcessing.ts';
 
 	let { open = $bindable(false) } = $props();
 
@@ -62,11 +61,16 @@
 		else if (!qrDataUrl) generateQr();
 	});
 
-	$effect(() => {
-		const nodes = processPeerData(peerStore.peers);
-		if (ws?.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify(nodes));
-		}
+	onMount(() => {
+		const pollId = setInterval(() => {
+			if (ws?.readyState !== WebSocket.OPEN) return;
+			const peers = Object.values(peerStore.peers);
+			const avgExcitement = peers.length
+				? peers.reduce((sum, p) => sum + p.energy, 0) / peers.length
+				: 0;
+			ws.send(JSON.stringify({ excitement: avgExcitement }));
+		}, 5000);
+		return () => clearInterval(pollId);
 	});
 
 	onDestroy(() => {
