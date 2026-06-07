@@ -69,6 +69,7 @@
 				? peers.reduce((sum, p) => sum + p.energy, 0) / peers.length
 				: 0;
 			ws.send(JSON.stringify({ excitement: avgExcitement }));
+			console.log('[ws] excitement:', avgExcitement);
 		}, 5000);
 		return () => clearInterval(pollId);
 	});
