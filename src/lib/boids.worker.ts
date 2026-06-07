@@ -6,6 +6,7 @@ type Boid = {
 	vy: number;
 	excitedTurnDirection: number;
 	excitedTurnFramesRemaining: number;
+	excitedTurnCooldownFramesRemaining: number;
 	colorHue: number;
 	excitability: number;
 	excitement: number;
@@ -39,10 +40,12 @@ const EXCITEMENT_EASE = 0.08;
 const EXCITE_STEER_BOOST = 0.55;
 const EXCITE_SPEED_BOOST = 1.35;
 const EXCITE_TURN_FORCE = 0.18;
-const EXCITE_TURN_REFRESH_MIN = 4;
-const EXCITE_TURN_REFRESH_MAX = 12;
-const EXCITE_TURN_TRIGGER_BASE = 0.04;
-const EXCITE_TURN_TRIGGER_BOOST = 0.2;
+const EXCITE_TURN_REFRESH_MIN = 6;
+const EXCITE_TURN_REFRESH_MAX = 16;
+const EXCITE_TURN_COOLDOWN_MIN = 7;
+const EXCITE_TURN_COOLDOWN_MAX = 14;
+const EXCITE_TURN_TRIGGER_BASE = 0.015;
+const EXCITE_TURN_TRIGGER_BOOST = 0.08;
 const EXCITE_SEPARATION_BOOST = 1.8;
 const EXCITE_FLOCK_BREAK_THRESHOLD = 0.28;
 const CONTROLLER_TIMEOUT_MS = 3000;
@@ -66,6 +69,7 @@ function lerp(a: number, b: number, t: number) {
 type TurnState = {
 	direction: number;
 	framesRemaining: number;
+	cooldownFramesRemaining?: number;
 };
 
 type ExcitedTurnOptions = {
@@ -90,13 +94,19 @@ export function computeExcitedTurnSteering(
 
 	let nextDirection = turnState.direction;
 	let nextFramesRemaining = Math.max(0, turnState.framesRemaining - 1);
+	let nextCooldownFramesRemaining = Math.max(0, (turnState.cooldownFramesRemaining ?? 0) - 1);
 	const turnTriggerChance = EXCITE_TURN_TRIGGER_BASE + excitement * EXCITE_TURN_TRIGGER_BOOST;
+	const turnDuration = Math.round(
+		lerp(EXCITE_TURN_REFRESH_MAX, EXCITE_TURN_REFRESH_MIN, excitement)
+	);
 
-	if (nextFramesRemaining === 0 && randomValue > 1 - turnTriggerChance) {
+	if (
+		nextFramesRemaining === 0 &&
+		nextCooldownFramesRemaining === 0 &&
+		randomValue > 1 - turnTriggerChance
+	) {
 		nextDirection = randomValue < 0.5 ? -1 : 1;
-		nextFramesRemaining = Math.round(
-			lerp(EXCITE_TURN_REFRESH_MAX, EXCITE_TURN_REFRESH_MIN, excitement)
-		);
+		nextFramesRemaining = turnDuration;
 	}
 
 	if (nextDirection === 0 || nextFramesRemaining === 0) {
@@ -104,7 +114,11 @@ export function computeExcitedTurnSteering(
 			steerX: 0,
 			steerY: 0,
 			desiredSpeed,
-			nextTurnState: { direction: 0, framesRemaining: 0 }
+			nextTurnState: {
+				direction: 0,
+				framesRemaining: 0,
+				cooldownFramesRemaining: nextCooldownFramesRemaining
+			}
 		};
 	}
 
@@ -113,8 +127,18 @@ export function computeExcitedTurnSteering(
 	const normY = speed > 0 ? velocity.vy / speed : 0;
 	const tangentX = -normY * nextDirection;
 	const tangentY = normX * nextDirection;
-	const turnForce = EXCITE_TURN_FORCE * (0.6 + excitement * 1.8);
+	const arcPhase = 1 - (nextFramesRemaining - 1) / Math.max(1, turnDuration - 1);
+	const arcEase = Math.sin(arcPhase * Math.PI);
+	const turnForce = EXCITE_TURN_FORCE * (0.35 + excitement * 1.05) * Math.max(0.2, arcEase);
 	const speedBoost = Math.max(0, desiredSpeed - speed) * 0.08;
+	const finishedTurn = nextFramesRemaining === 1;
+	if (finishedTurn) {
+		nextDirection = 0;
+		nextFramesRemaining = 0;
+		nextCooldownFramesRemaining = Math.round(
+			lerp(EXCITE_TURN_COOLDOWN_MAX, EXCITE_TURN_COOLDOWN_MIN, excitement)
+		);
+	}
 
 	return {
 		steerX: tangentX * turnForce + normX * speedBoost,
@@ -122,7 +146,8 @@ export function computeExcitedTurnSteering(
 		desiredSpeed,
 		nextTurnState: {
 			direction: nextDirection,
-			framesRemaining: nextFramesRemaining
+			framesRemaining: nextFramesRemaining,
+			cooldownFramesRemaining: nextCooldownFramesRemaining
 		}
 	};
 }
@@ -177,6 +202,7 @@ function initBoids(width: number, height: number): Boid[] {
 			vy: Math.sin(angle) * speed,
 			excitedTurnDirection: 0,
 			excitedTurnFramesRemaining: 0,
+			excitedTurnCooldownFramesRemaining: 0,
 			colorHue: DEFAULT_BOID_HUE,
 			excitability: EXCITABILITY_MIN + Math.random() * (EXCITABILITY_MAX - EXCITABILITY_MIN),
 			excitement: 0,
@@ -276,14 +302,17 @@ function updateBoids() {
 			{
 				excitement,
 				turnState: {
-					direction: b.excitedTurnDirection,
-					framesRemaining: b.excitedTurnFramesRemaining
-				},
-				randomValue: Math.random()
-			}
-		);
+						direction: b.excitedTurnDirection,
+						framesRemaining: b.excitedTurnFramesRemaining,
+						cooldownFramesRemaining: b.excitedTurnCooldownFramesRemaining
+					},
+					randomValue: Math.random()
+				}
+			);
 		b.excitedTurnDirection = excitedTurn.nextTurnState.direction;
 		b.excitedTurnFramesRemaining = excitedTurn.nextTurnState.framesRemaining;
+		b.excitedTurnCooldownFramesRemaining =
+			excitedTurn.nextTurnState.cooldownFramesRemaining ?? 0;
 		steerX += excitedTurn.steerX;
 		steerY += excitedTurn.steerY;
 
