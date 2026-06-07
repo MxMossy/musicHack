@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import BoidsWorker from './boids.worker?worker';
+	import { peerStore } from './peerStore.svelte.ts';
 
 	let { class: klass = 'fixed inset-0 bg-[#0a0a0f]' }: { class?: string } = $props();
 
@@ -15,6 +16,7 @@
 	}
 
 	let worker: Worker | null = null;
+	let forwardedPeerIds = new Set<string>();
 
 	onMount(() => {
 		worker = new BoidsWorker();
@@ -44,7 +46,31 @@
 			worker?.postMessage({ type: 'stop' });
 			worker?.terminate();
 			worker = null;
+			forwardedPeerIds.clear();
 		};
+	});
+
+	$effect(() => {
+		const currentPeerIds = new Set(Object.keys(peerStore.peers));
+
+		for (const peerId of forwardedPeerIds) {
+			if (!currentPeerIds.has(peerId)) {
+				setClientExcitement(peerId, 0);
+				forwardedPeerIds.delete(peerId);
+			}
+		}
+
+		for (const [peerId, peerState] of Object.entries(peerStore.peers)) {
+			setClientExcitement(peerId, peerState.energy);
+			forwardedPeerIds.add(peerId);
+		}
+	});
+
+	onDestroy(() => {
+		for (const peerId of forwardedPeerIds) {
+			setClientExcitement(peerId, 0);
+		}
+		forwardedPeerIds.clear();
 	});
 </script>
 
