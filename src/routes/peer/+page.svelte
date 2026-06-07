@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { onMount, onDestroy } from 'svelte';
 	import Peer, { type DataConnection } from 'peerjs';
+	import { getIceServers } from '$lib/iceServers';
 
 	const joinCode = page.url.searchParams.get('joincode') ?? '';
 	let status = $state<'connecting' | 'connected' | 'error'>('connecting');
@@ -38,8 +39,9 @@
 		needsPermission = false;
 	}
 
-	function connect() {
-		peer = new Peer();
+	async function connect() {
+		const iceServers = await getIceServers();
+		peer = new Peer(iceServers.length ? { config: { iceServers } } : {});
 		peer.on('open', () => {
 			conn = peer.connect(joinCode);
 			conn.on('open', () => {

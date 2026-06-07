@@ -3,6 +3,7 @@
 	import QRCode from 'qrcode';
 	import Peer from 'peerjs';
 	import { peerStore, type Orientation } from './peerStore.svelte.ts';
+	import { getIceServers } from './iceServers.ts';
 
 	let { open = $bindable(false) } = $props();
 
@@ -29,7 +30,8 @@
 			color: { dark: '#ffffff', light: '#09090b' }
 		});
 
-		peer = new Peer(joinCode);
+		const iceServers = await getIceServers();
+		peer = new Peer(joinCode, iceServers.length ? { config: { iceServers } } : {});
 		peer.on('connection', (conn) => {
 			connectedPeers++;
 			conn.on('data', (raw) => {
