@@ -56,6 +56,7 @@
 	let leftHandY = $state(0.5);
 	let leftHandActive = $state(false);
 	let leftHandEnergy = $state(0);
+	let handEnergySensitivity = $state(0.5);
 	let rightHandY = $state(0.5);
 	let rightHandActive = $state(false);
 	let rightHandEnergy = $state(0);
@@ -338,8 +339,14 @@
 		return currentEnergy * 0.8 + rawEnergy * 0.2;
 	}
 
+	function getSpeedForMaxHandEnergy(): number {
+		const minSpeed = 3.0;
+		const maxSpeed = 12.0;
+		return maxSpeed - handEnergySensitivity * (maxSpeed - minSpeed);
+	}
+
 	function computeLeftHandEnergy(landmarks: Landmark[], now: number): number {
-		const speedForMaxEnergy = 8.0;
+		const speedForMaxEnergy = getSpeedForMaxHandEnergy();
 		const averageSpeed = computeAverageLandmarkSpeed(
 			landmarks,
 			previousLeftHandPoints,
@@ -351,7 +358,7 @@
 	}
 
 	function computeRightHandEnergy(landmarks: Landmark[], now: number): number {
-		const speedForMaxEnergy = 8.0;
+		const speedForMaxEnergy = getSpeedForMaxHandEnergy();
 		const averageSpeed = computeAverageLandmarkSpeed(
 			landmarks,
 			previousRightHandPoints,
@@ -378,7 +385,7 @@
 	}
 
 	function computeLeftPoseWristEnergy(wrist: Landmark, poseScale: number, now: number): number {
-		const speedForMaxEnergy = 8.0;
+		const speedForMaxEnergy = getSpeedForMaxHandEnergy();
 		const averageSpeed = computeAverageLandmarkSpeed(
 			[wrist],
 			previousLeftPoseWristPoints,
@@ -391,7 +398,7 @@
 	}
 
 	function computeRightPoseWristEnergy(wrist: Landmark, poseScale: number, now: number): number {
-		const speedForMaxEnergy = 8.0;
+		const speedForMaxEnergy = getSpeedForMaxHandEnergy();
 		const averageSpeed = computeAverageLandmarkSpeed(
 			[wrist],
 			previousRightPoseWristPoints,
@@ -947,7 +954,7 @@
 
 		{#if hasVideoSource}
 			<!-- MIDI device controls -->
-			<div class="flex items-center gap-3">
+			<div class="flex flex-wrap items-center gap-3">
 				<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">MIDI Out</span>
 				{#if midiOutputs.length > 0}
 					<select
@@ -972,6 +979,22 @@
 				{:else}
 					<span class="font-mono text-[10px] text-zinc-700">No MIDI outputs</span>
 				{/if}
+				<div class="ml-2 flex items-center gap-2">
+					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">
+						ENERGY SENS
+					</span>
+					<input
+						type="range"
+						bind:value={handEnergySensitivity}
+						min="0"
+						max="1"
+						step="0.01"
+						class="h-1.5 w-24 cursor-pointer accent-zinc-300"
+					/>
+					<span class="w-9 text-right font-mono text-[10px] tabular-nums text-zinc-500">
+						{Math.round(handEnergySensitivity * 100)}%
+					</span>
+				</div>
 			</div>
 
 			<!-- mappings grid -->
