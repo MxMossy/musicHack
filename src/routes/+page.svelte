@@ -15,6 +15,7 @@
 		type Landmark
 	} from '$lib/body-relative';
 	import PeerModal from '$lib/PeerModal.svelte';
+	import Boids from '$lib/Boids.svelte';
 
 	const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 	const POSE_MODEL =
@@ -37,6 +38,7 @@
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
 	let peerModalOpen = $state(false);
+	let boidsEnabled = $state(false);
 	let stream = $state<MediaStream | null>(null);
 	let error = $state('');
 	let status = $state('');
@@ -79,7 +81,7 @@
 	let lastMidiSend = 0;
 
 	// MIDI mappings — each entry owns its type, target number, and live value
-	type CcMapping   = { name: string; type: 'cc';   number: number; value: number };
+	type CcMapping = { name: string; type: 'cc'; number: number; value: number };
 	type NoteMapping = { name: string; type: 'note'; number: number; value: boolean };
 	type MidiMapping = CcMapping | NoteMapping;
 	type ThresholdTriggerState = {
@@ -89,9 +91,9 @@
 
 	let midiMappings = $state<MidiMapping[]>([
 		{ name: 'Left Hand X', type: 'cc', number: 1, value: 0 },
-		{ name: 'Left Hand Y',  type: 'cc',   number: 2,  value: 0 },
+		{ name: 'Left Hand Y', type: 'cc', number: 2, value: 0 },
 		{ name: 'Right Hand X', type: 'cc', number: 3, value: 0 },
-		{ name: 'Right Hand Y', type: 'cc',   number: 4,  value: 0 },
+		{ name: 'Right Hand Y', type: 'cc', number: 4, value: 0 },
 		{ name: 'Left Foot X', type: 'cc', number: 5, value: 0 },
 		{ name: 'Left Foot Y', type: 'cc', number: 6, value: 0 },
 		{ name: 'Right Foot X', type: 'cc', number: 7, value: 0 },
@@ -109,7 +111,7 @@
 		{ name: 'Right Open Hand', type: 'note', number: 66, value: false },
 		{ name: 'Right Closed Hand', type: 'note', number: 67, value: false },
 		{ name: 'Left Hand Rotation', type: 'cc', number: 13, value: 0.5 },
-		{ name: 'Right Hand Rotation', type: 'cc', number: 14, value: 0.5 },
+		{ name: 'Right Hand Rotation', type: 'cc', number: 14, value: 0.5 }
 	]);
 	let leftEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
 	let rightEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
@@ -288,7 +290,11 @@
 			const fingertip = landmarks[tip];
 			if (!base || !fingertip) continue;
 
-			const wristToBase = Math.hypot(base.x - wrist.x, base.y - wrist.y, (base.z ?? 0) - (wrist.z ?? 0));
+			const wristToBase = Math.hypot(
+				base.x - wrist.x,
+				base.y - wrist.y,
+				(base.z ?? 0) - (wrist.z ?? 0)
+			);
 			if (wristToBase <= 0) continue;
 
 			const wristToTip = Math.hypot(
@@ -349,7 +355,11 @@
 		return count > 0 ? totalSpeed / count : 0;
 	}
 
-	function smoothEnergy(currentEnergy: number, averageSpeed: number, speedForMaxEnergy: number): number {
+	function smoothEnergy(
+		currentEnergy: number,
+		averageSpeed: number,
+		speedForMaxEnergy: number
+	): number {
 		const rawEnergy = clamp01(averageSpeed / speedForMaxEnergy);
 		return currentEnergy * 0.8 + rawEnergy * 0.2;
 	}
@@ -603,7 +613,15 @@
 	}
 
 	function runLoop() {
-		if (!videoEl || !canvasEl || !poseLandmarker || !handLandmarker || !gestureRecognizer || !hasVideoSource) return;
+		if (
+			!videoEl ||
+			!canvasEl ||
+			!poseLandmarker ||
+			!handLandmarker ||
+			!gestureRecognizer ||
+			!hasVideoSource
+		)
+			return;
 
 		if (videoEl.readyState >= 2) {
 			const w = videoEl.videoWidth;
@@ -658,7 +676,9 @@
 					prevLeftArmRaised = lRaised;
 				}
 
-				const leftFoot = leftFootLandmarks.some(Boolean) ? computeFootPoint(landmarks, 'left') : undefined;
+				const leftFoot = leftFootLandmarks.some(Boolean)
+					? computeFootPoint(landmarks, 'left')
+					: undefined;
 				const rightFoot = rightFootLandmarks.some(Boolean)
 					? computeFootPoint(landmarks, 'right')
 					: undefined;
@@ -713,7 +733,8 @@
 			const rightGestureIndex = gestureResults.handednesses.findIndex(
 				(entry) => entry?.[0]?.categoryName === 'Right'
 			);
-			const leftGesture = leftGestureIndex >= 0 ? gestureResults.gestures[leftGestureIndex]?.[0] : undefined;
+			const leftGesture =
+				leftGestureIndex >= 0 ? gestureResults.gestures[leftGestureIndex]?.[0] : undefined;
 			const rightGesture =
 				rightGestureIndex >= 0 ? gestureResults.gestures[rightGestureIndex]?.[0] : undefined;
 			for (let i = 0; i < hands.landmarks.length; i++) {
@@ -721,7 +742,8 @@
 				drawConnections(ctx, landmarks, HandLandmarker.HAND_CONNECTIONS, w, h);
 				drawJoints(ctx, landmarks, 2.5, w, h);
 				const handedness = hands.handednesses[i]?.[0]?.categoryName;
-				const gesture = handedness === 'Left' ? leftGesture : handedness === 'Right' ? rightGesture : undefined;
+				const gesture =
+					handedness === 'Left' ? leftGesture : handedness === 'Right' ? rightGesture : undefined;
 				const gestureName = gesture?.categoryName as HandGestureName | undefined;
 				const gestureScore = gesture?.score ?? 0;
 				if (handedness === 'Left') {
@@ -762,11 +784,7 @@
 						(gestureName === 'Open_Palm' || gestureName === 'Closed_Fist') &&
 						gestureScore >= 0.6
 					) {
-						previousLeftGesture = handleGestureTrigger(
-							'Left',
-							gestureName,
-							previousLeftGesture
-						);
+						previousLeftGesture = handleGestureTrigger('Left', gestureName, previousLeftGesture);
 					}
 					const energy = computeLeftHandEnergy(landmarks, now);
 					if (leftHandEnergyMapping) leftHandEnergyMapping.value = energy;
@@ -816,11 +834,7 @@
 						(gestureName === 'Open_Palm' || gestureName === 'Closed_Fist') &&
 						gestureScore >= 0.6
 					) {
-						previousRightGesture = handleGestureTrigger(
-							'Right',
-							gestureName,
-							previousRightGesture
-						);
+						previousRightGesture = handleGestureTrigger('Right', gestureName, previousRightGesture);
 					}
 					const energy = computeRightHandEnergy(landmarks, now);
 					if (rightHandEnergyMapping) rightHandEnergyMapping.value = energy;
@@ -925,7 +939,6 @@
 			);
 
 			if (sentMidiThisFrame) lastMidiSend = now;
-
 		}
 
 		rafId = requestAnimationFrame(runLoop);
@@ -938,11 +951,15 @@
 	}
 </script>
 
-<div class="flex h-screen overflow-hidden bg-zinc-950">
+{#if boidsEnabled}
+	<Boids class="fixed inset-0 -z-10 bg-[#0a0a0f]" />
+{/if}
+
+<div class="flex h-screen overflow-hidden {boidsEnabled ? '' : 'bg-zinc-950'}">
 	<!-- main area -->
-	<div class="flex flex-1 flex-col items-center justify-center gap-6 p-8 min-w-0">
-		<div class="flex items-stretch gap-3 w-full max-w-2xl {hasVideoSource ? '' : 'hidden'}">
-			<div class="relative flex-1 aspect-video">
+	<div class="flex min-w-0 flex-1 flex-col items-center justify-center gap-6 p-8">
+		<div class="flex w-full max-w-2xl items-stretch gap-3 {hasVideoSource ? '' : 'hidden'}">
+			<div class="relative aspect-video flex-1">
 				<video
 					bind:this={videoEl}
 					autoplay
@@ -951,20 +968,23 @@
 					controls={videoMode === 'upload'}
 					class="h-full w-full border border-zinc-800 object-cover"
 				></video>
-				<canvas bind:this={canvasEl} class="pointer-events-none absolute inset-0 h-full w-full"></canvas>
+				<canvas bind:this={canvasEl} class="pointer-events-none absolute inset-0 h-full w-full"
+				></canvas>
 				{#if status}
 					<div class="absolute bottom-2 left-2 z-10 flex items-center gap-1.5">
 						<div class="h-1.5 w-1.5 animate-pulse bg-zinc-400"></div>
-						<span class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase">{status}</span>
+						<span class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase"
+							>{status}</span
+						>
 					</div>
 				{/if}
 			</div>
 
 			<!-- left hand y slider -->
 			<div class="relative w-4 border border-zinc-800">
-				<div class="absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 bg-zinc-800"></div>
+				<div class="absolute top-0 bottom-0 left-1/2 w-px -translate-x-1/2 bg-zinc-800"></div>
 				<div
-					class="absolute left-0 right-0 h-px {leftHandActive ? 'bg-white' : 'bg-zinc-700'}"
+					class="absolute right-0 left-0 h-px {leftHandActive ? 'bg-white' : 'bg-zinc-700'}"
 					style="top: {(leftHandY * 100).toFixed(2)}%"
 				></div>
 			</div>
@@ -995,7 +1015,7 @@
 							const id = (e.target as HTMLSelectElement).value;
 							midiOutput = midiOutputs.find((o) => o.id === id) ?? null;
 						}}
-						class="cursor-pointer rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1"
+						class="cursor-pointer rounded-none border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-[10px] text-zinc-300"
 					>
 						{#each midiOutputs as out}
 							<option value={out.id} selected={midiOutput?.id === out.id}>{out.name}</option>
@@ -1007,7 +1027,7 @@
 						bind:value={midiChannel}
 						min="1"
 						max="16"
-						class="w-16 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-2 py-1 text-center"
+						class="w-16 rounded-none border border-zinc-700 bg-zinc-950 px-2 py-1 text-center font-mono text-[10px] text-zinc-300"
 					/>
 				{:else}
 					<span class="font-mono text-[10px] text-zinc-700">No MIDI outputs</span>
@@ -1024,39 +1044,44 @@
 						step="0.01"
 						class="h-1.5 w-24 cursor-pointer accent-zinc-300"
 					/>
-					<span class="w-9 text-right font-mono text-[10px] tabular-nums text-zinc-500">
+					<span class="w-9 text-right font-mono text-[10px] text-zinc-500 tabular-nums">
 						{Math.round(handEnergySensitivity * 100)}%
 					</span>
 				</div>
 			</div>
 
 			<!-- mappings grid -->
-			<div class="w-full max-w-2xl max-h-64 overflow-y-auto border border-zinc-800 p-3">
+			<div class="max-h-64 w-full max-w-2xl overflow-y-auto border border-zinc-800 p-3">
 				<div class="grid grid-cols-[1fr_auto_auto] gap-x-6 gap-y-1">
 					<!-- header -->
 					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">Name</span>
 					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase">MIDI</span>
-					<span class="font-mono text-[10px] tracking-widest text-zinc-600 uppercase text-right">Value</span>
+					<span class="text-right font-mono text-[10px] tracking-widest text-zinc-600 uppercase"
+						>Value</span
+					>
 
 					<!-- rows -->
 					{#each midiMappings as m}
 						<span class="font-mono text-[10px] text-zinc-400">{m.name}</span>
 						<div class="flex items-center gap-1">
-							<span class="font-mono text-[10px] text-zinc-500">{m.type === 'cc' ? 'CC' : 'N'}</span>
+							<span class="font-mono text-[10px] text-zinc-500">{m.type === 'cc' ? 'CC' : 'N'}</span
+							>
 							<input
 								type="number"
 								bind:value={m.number}
 								min="0"
 								max="127"
-								class="w-12 rounded-none border border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300 px-1 py-0.5 text-center"
+								class="w-12 rounded-none border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-center font-mono text-[10px] text-zinc-300"
 							/>
 						</div>
 						{#if m.type === 'cc'}
-							<span class="font-mono text-[10px] tabular-nums text-zinc-300 text-right">
+							<span class="text-right font-mono text-[10px] text-zinc-300 tabular-nums">
 								{(m.value as number).toFixed(3)}
 							</span>
 						{:else}
-							<span class="font-mono text-[10px] text-right {m.value ? 'text-white' : 'text-zinc-600'}">
+							<span
+								class="text-right font-mono text-[10px] {m.value ? 'text-white' : 'text-zinc-600'}"
+							>
 								{m.value ? 'ON' : 'OFF'}
 							</span>
 						{/if}
@@ -1071,10 +1096,18 @@
 	</div>
 </div>
 
+<!-- boids toggle -->
+<button
+	onclick={() => (boidsEnabled = !boidsEnabled)}
+	class="fixed top-4 left-4 z-20 cursor-pointer rounded-none border px-3 py-1.5 font-mono text-[10px] tracking-widest uppercase transition-colors {boidsEnabled ? 'border-zinc-500 text-zinc-300' : 'border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300'}"
+>
+	Boids
+</button>
+
 <!-- peer button -->
 <button
 	onclick={() => (peerModalOpen = true)}
-	class="fixed right-4 top-4 z-20 cursor-pointer rounded-none border border-zinc-700 px-3 py-1.5 font-mono text-[10px] tracking-widest text-zinc-500 uppercase transition-colors hover:border-zinc-500 hover:text-zinc-300"
+	class="fixed top-4 right-4 z-20 cursor-pointer rounded-none border border-zinc-700 px-3 py-1.5 font-mono text-[10px] tracking-widest text-zinc-500 uppercase transition-colors hover:border-zinc-500 hover:text-zinc-300"
 >
 	Peer
 </button>
