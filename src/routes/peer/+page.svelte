@@ -8,12 +8,67 @@
 	let status = $state<'connecting' | 'connected' | 'error'>('connecting');
 	let needsPermission = $state(false);
 	let orientation = $state<{ alpha: number | null; beta: number | null; gamma: number | null } | null>(null);
-	let peer: Peer;
+	let peer: Peer | null = null;
 	let conn: DataConnection | null = null;
 	let lastSend = 0;
+	let motionEnabled = $state(false);
+	let wakeLockSupported = $state(false);
+	let wakeLockActive = $state(false);
+	let wakeLockError = $state('');
+	let reconnecting = false;
+	let wakeLock: WakeLockSentinel | null = null;
+
+	type WakeLockSentinel = {
+		released: boolean;
+		release: () => Promise<void>;
+		addEventListener?: (type: 'release', listener: () => void) => void;
+	};
+
+	type WakeLockNavigator = Navigator & {
+		wakeLock?: {
+			request: (type: 'screen') => Promise<WakeLockSentinel>;
+		};
+	};
+
+	function shouldMaintainWakeLock({
+		isSupported,
+		isPageVisible,
+		isConnected,
+		hasMotionAccess
+	}: {
+		isSupported: boolean;
+		isPageVisible: boolean;
+		isConnected: boolean;
+		hasMotionAccess: boolean;
+	}) {
+		return Boolean(isSupported && isPageVisible && isConnected && hasMotionAccess);
+	}
+
+	function getWakeLockMessage({
+		isSupported,
+		isActive,
+		errorMessage
+	}: {
+		isSupported: boolean;
+		isActive: boolean;
+		errorMessage: string;
+	}) {
+		if (!isSupported) return 'Wake lock unavailable on this browser';
+		if (isActive) return 'Screen will stay awake while tracking';
+		if (errorMessage) return errorMessage;
+		return 'Tap Enable Motion and keep this page open';
+	}
 
 	function startGyro() {
+		if (motionEnabled) return;
+		motionEnabled = true;
 		window.addEventListener('deviceorientation', handleOrientation);
+	}
+
+	function stopGyro() {
+		if (!motionEnabled) return;
+		motionEnabled = false;
+		window.removeEventListener('deviceorientation', handleOrientation);
 	}
 
 	function handleOrientation(e: DeviceOrientationEvent) {
@@ -25,6 +80,59 @@
 		conn.send({ alpha: e.alpha, beta: e.beta, gamma: e.gamma });
 	}
 
+	async function requestWakeLock() {
+		const wakeLockApi = (navigator as WakeLockNavigator).wakeLock;
+		if (!shouldMaintainWakeLock({
+			isSupported: Boolean(wakeLockApi),
+			isPageVisible: document.visibilityState === 'visible',
+			isConnected: status === 'connected',
+			hasMotionAccess: motionEnabled
+		})) {
+			return;
+		}
+
+		try {
+			wakeLockError = '';
+			wakeLock = await wakeLockApi!.request('screen');
+			wakeLockActive = !wakeLock.released;
+			wakeLock.addEventListener?.('release', () => {
+				wakeLockActive = false;
+			});
+		} catch {
+			wakeLockActive = false;
+			wakeLockError = 'Unable to keep the screen awake on this device';
+		}
+	}
+
+	async function releaseWakeLock() {
+		if (!wakeLock) return;
+		const activeWakeLock = wakeLock;
+		wakeLock = null;
+		wakeLockActive = false;
+		try {
+			if (!activeWakeLock.released) await activeWakeLock.release();
+		} catch {
+			// Ignore release errors while the page is being backgrounded or closed.
+		}
+	}
+
+	async function syncWakeLock() {
+		wakeLockSupported = 'wakeLock' in navigator;
+		if (!shouldMaintainWakeLock({
+			isSupported: wakeLockSupported,
+			isPageVisible: document.visibilityState === 'visible',
+			isConnected: status === 'connected',
+			hasMotionAccess: motionEnabled
+		})) {
+			await releaseWakeLock();
+			return;
+		}
+
+		if (wakeLockActive && wakeLock && !wakeLock.released) return;
+		await releaseWakeLock();
+		await requestWakeLock();
+	}
+
 	async function requestPermission() {
 		// iOS 13+ requires explicit permission
 		const DOE = DeviceOrientationEvent as unknown as {
@@ -32,40 +140,93 @@
 		};
 		if (typeof DOE.requestPermission === 'function') {
 			const result = await DOE.requestPermission();
-			if (result === 'granted') startGyro();
+			if (result === 'granted') {
+				startGyro();
+				await syncWakeLock();
+			}
 		} else {
 			startGyro();
+			await syncWakeLock();
 		}
 		needsPermission = false;
 	}
 
+	function attachConnection(connection: DataConnection) {
+		conn = connection;
+		conn.on('open', async () => {
+			status = 'connected';
+			reconnecting = false;
+			// Check if we need explicit iOS permission
+			const DOE = DeviceOrientationEvent as unknown as { requestPermission?: unknown };
+			if (typeof DOE.requestPermission === 'function') {
+				needsPermission = !motionEnabled;
+			} else if (!motionEnabled) {
+				startGyro();
+			}
+			await syncWakeLock();
+		});
+		conn.on('close', () => {
+			conn = null;
+			status = 'connecting';
+			void syncWakeLock();
+		});
+		conn.on('error', () => {
+			status = 'error';
+			void syncWakeLock();
+		});
+	}
+
 	async function connect() {
 		const iceServers = await getIceServers();
+		peer?.destroy();
 		peer = new Peer(iceServers.length ? { config: { iceServers } } : {});
 		peer.on('open', () => {
-			conn = peer.connect(joinCode);
-			conn.on('open', () => {
-				status = 'connected';
-				// Check if we need explicit iOS permission
-				const DOE = DeviceOrientationEvent as unknown as { requestPermission?: unknown };
-				if (typeof DOE.requestPermission === 'function') {
-					needsPermission = true;
-				} else {
-					startGyro();
-				}
-			});
-			conn.on('error', () => (status = 'error'));
+			status = 'connecting';
+			attachConnection(peer!.connect(joinCode));
 		});
-		peer.on('error', () => (status = 'error'));
+		peer.on('disconnected', () => {
+			status = 'connecting';
+			void syncWakeLock();
+		});
+		peer.on('close', () => {
+			status = 'connecting';
+			void syncWakeLock();
+		});
+		peer.on('error', () => {
+			status = 'error';
+			void syncWakeLock();
+		});
+	}
+
+	async function resumePhoneSession() {
+		if (document.visibilityState !== 'visible') {
+			await syncWakeLock();
+			return;
+		}
+
+		await syncWakeLock();
+		if (status === 'connected' || reconnecting || !joinCode) return;
+		reconnecting = true;
+		status = 'connecting';
+		try {
+			await connect();
+		} finally {
+			reconnecting = false;
+		}
 	}
 
 	onMount(() => {
 		if (!joinCode) { status = 'error'; return; }
-		connect();
+		wakeLockSupported = 'wakeLock' in navigator;
+		void connect();
+		document.addEventListener('visibilitychange', resumePhoneSession);
 	});
 
 	onDestroy(() => {
-		window.removeEventListener('deviceorientation', handleOrientation);
+		document.removeEventListener('visibilitychange', resumePhoneSession);
+		stopGyro();
+		void releaseWakeLock();
+		conn?.close();
 		peer?.destroy();
 	});
 </script>
@@ -88,6 +249,17 @@
 				Enable Motion
 			</button>
 		{/if}
+		<p
+			class={`mt-2 text-center font-mono text-[10px] tracking-widest uppercase ${
+				wakeLockActive ? 'text-cyan-300' : 'text-zinc-500'
+			}`}
+		>
+			{getWakeLockMessage({
+				isSupported: wakeLockSupported,
+				isActive: wakeLockActive,
+				errorMessage: wakeLockError
+			})}
+		</p>
 		{#if orientation}
 			<div class="mt-4 grid grid-cols-3 gap-6 text-center">
 				<div>
