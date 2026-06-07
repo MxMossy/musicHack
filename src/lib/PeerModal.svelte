@@ -63,7 +63,7 @@
 	});
 
 	$effect(() => {
-		const nodes = processPeerData(peerStore.orientations);
+		const nodes = processPeerData(peerStore.peers);
 		if (ws?.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify(nodes));
 		}
@@ -77,7 +77,7 @@
 		peerStore.clear();
 	});
 
-	const orientationEntries = $derived(Object.entries(peerStore.orientations));
+	const orientationEntries = $derived(Object.entries(peerStore.peers));
 </script>
 
 {#if open}
@@ -119,25 +119,41 @@
 			<!-- orientation data -->
 			{#if orientationEntries.length > 0}
 				<div class="w-full border-t border-zinc-800 pt-4 flex flex-col gap-3">
-					{#each orientationEntries as [id, o], i}
+					{#each orientationEntries as [id, peer], i}
 						<div>
 							{#if orientationEntries.length > 1}
 								<p class="font-mono text-[9px] tracking-widest text-zinc-600 uppercase mb-1">
 									Peer {i + 1}
 								</p>
 							{/if}
+							<div class="mb-2 flex items-center justify-between gap-3">
+								<p class="truncate font-mono text-[9px] tracking-widest text-zinc-600 uppercase">
+									{id}
+								</p>
+								<div class="flex min-w-24 items-center gap-2">
+									<div class="h-1.5 flex-1 overflow-hidden bg-zinc-800">
+										<div
+											class="h-full bg-cyan-300 transition-[width] duration-75"
+											style={`width: ${peer.energy * 100}%`}
+										></div>
+									</div>
+									<p class="w-10 text-right font-mono text-[10px] tabular-nums text-zinc-300">
+										{peer.energy.toFixed(2)}
+									</p>
+								</div>
+							</div>
 							<div class="grid grid-cols-3 gap-4 text-center">
 								<div>
 									<p class="font-mono text-[9px] text-zinc-600 uppercase tracking-widest">α</p>
-									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(o.alpha)}°</p>
+									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(peer.orientation.alpha)}°</p>
 								</div>
 								<div>
 									<p class="font-mono text-[9px] text-zinc-600 uppercase tracking-widest">β</p>
-									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(o.beta)}°</p>
+									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(peer.orientation.beta)}°</p>
 								</div>
 								<div>
 									<p class="font-mono text-[9px] text-zinc-600 uppercase tracking-widest">γ</p>
-									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(o.gamma)}°</p>
+									<p class="font-mono text-sm tabular-nums text-zinc-300">{fmt(peer.orientation.gamma)}°</p>
 								</div>
 							</div>
 						</div>
