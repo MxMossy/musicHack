@@ -4,6 +4,8 @@ type Boid = {
 	y: number;
 	vx: number;
 	vy: number;
+	excitedTurnDirection: number;
+	excitedTurnFramesRemaining: number;
 	colorHue: number;
 	excitability: number;
 	excitement: number;
@@ -36,9 +38,13 @@ const EXCITABILITY_MAX = 1.8;
 const EXCITEMENT_EASE = 0.08;
 const EXCITE_STEER_BOOST = 0.55;
 const EXCITE_SPEED_BOOST = 1.35;
-const EXCITE_JITTER_FORCE = 0.08;
+const EXCITE_TURN_FORCE = 0.18;
+const EXCITE_TURN_REFRESH_MIN = 4;
+const EXCITE_TURN_REFRESH_MAX = 12;
+const EXCITE_TURN_TRIGGER_BASE = 0.04;
+const EXCITE_TURN_TRIGGER_BOOST = 0.2;
 const EXCITE_SEPARATION_BOOST = 1.8;
-const EXCITE_FLOCK_BREAK_THRESHOLD = 0.45;
+const EXCITE_FLOCK_BREAK_THRESHOLD = 0.28;
 const CONTROLLER_TIMEOUT_MS = 3000;
 const DEFAULT_BOID_HUE = 196;
 const CONTROLLER_HUE_MIN_DISTANCE = 24;
@@ -52,6 +58,74 @@ let controllers = new Map<string, BoidController>();
 let intervalId: ReturnType<typeof setInterval> | null = null;
 
 function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+
+function lerp(a: number, b: number, t: number) {
+	return a + (b - a) * t;
+}
+
+type TurnState = {
+	direction: number;
+	framesRemaining: number;
+};
+
+type ExcitedTurnOptions = {
+	excitement: number;
+	turnState: TurnState;
+	randomValue: number;
+};
+
+export function computeExcitedTurnSteering(
+	velocity: { vx: number; vy: number },
+	{ excitement, turnState, randomValue }: ExcitedTurnOptions
+) {
+	const desiredSpeed = MAX_SPEED + excitement * (EXCITE_SPEED_BOOST + 0.6);
+	if (excitement <= 0.03) {
+		return {
+			steerX: 0,
+			steerY: 0,
+			desiredSpeed,
+			nextTurnState: { direction: 0, framesRemaining: 0 }
+		};
+	}
+
+	let nextDirection = turnState.direction;
+	let nextFramesRemaining = Math.max(0, turnState.framesRemaining - 1);
+	const turnTriggerChance = EXCITE_TURN_TRIGGER_BASE + excitement * EXCITE_TURN_TRIGGER_BOOST;
+
+	if (nextFramesRemaining === 0 && randomValue > 1 - turnTriggerChance) {
+		nextDirection = randomValue < 0.5 ? -1 : 1;
+		nextFramesRemaining = Math.round(
+			lerp(EXCITE_TURN_REFRESH_MAX, EXCITE_TURN_REFRESH_MIN, excitement)
+		);
+	}
+
+	if (nextDirection === 0 || nextFramesRemaining === 0) {
+		return {
+			steerX: 0,
+			steerY: 0,
+			desiredSpeed,
+			nextTurnState: { direction: 0, framesRemaining: 0 }
+		};
+	}
+
+	const speed = Math.sqrt(velocity.vx * velocity.vx + velocity.vy * velocity.vy) || desiredSpeed;
+	const normX = speed > 0 ? velocity.vx / speed : 1;
+	const normY = speed > 0 ? velocity.vy / speed : 0;
+	const tangentX = -normY * nextDirection;
+	const tangentY = normX * nextDirection;
+	const turnForce = EXCITE_TURN_FORCE * (0.6 + excitement * 1.8);
+	const speedBoost = Math.max(0, desiredSpeed - speed) * 0.08;
+
+	return {
+		steerX: tangentX * turnForce + normX * speedBoost,
+		steerY: tangentY * turnForce + normY * speedBoost,
+		desiredSpeed,
+		nextTurnState: {
+			direction: nextDirection,
+			framesRemaining: nextFramesRemaining
+		}
+	};
+}
 
 function circularHueDistance(a: number, b: number) {
 	const delta = Math.abs(a - b);
@@ -101,6 +175,8 @@ function initBoids(width: number, height: number): Boid[] {
 			y: Math.random() * height,
 			vx: Math.cos(angle) * speed,
 			vy: Math.sin(angle) * speed,
+			excitedTurnDirection: 0,
+			excitedTurnFramesRemaining: 0,
 			colorHue: DEFAULT_BOID_HUE,
 			excitability: EXCITABILITY_MIN + Math.random() * (EXCITABILITY_MAX - EXCITABILITY_MIN),
 			excitement: 0,
@@ -195,12 +271,28 @@ function updateBoids() {
 		if (sepCount > 0) { const m = Math.sqrt(sepX*sepX+sepY*sepY); if (m>0) { steerX+=(sepX/m)*steerForce*separationWeight; steerY+=(sepY/m)*steerForce*separationWeight; } }
 		if (aliCount > 0 && alignmentWeight > 0) { const ax=aliX/aliCount-b.vx, ay=aliY/aliCount-b.vy, m=Math.sqrt(ax*ax+ay*ay); if (m>0) { steerX+=(ax/m)*steerForce*alignmentWeight; steerY+=(ay/m)*steerForce*alignmentWeight; } }
 		if (cohCount > 0 && cohesionWeight > 0) { const cx=cohX/cohCount-b.x, cy=cohY/cohCount-b.y, m=Math.sqrt(cx*cx+cy*cy); if (m>0) { steerX+=(cx/m)*steerForce*cohesionWeight; steerY+=(cy/m)*steerForce*cohesionWeight; } }
-		if (excitement > 0.03) { steerX += (Math.random()*2-1)*EXCITE_JITTER_FORCE*excitement; steerY += (Math.random()*2-1)*EXCITE_JITTER_FORCE*excitement; }
+		const excitedTurn = computeExcitedTurnSteering(
+			{ vx: b.vx, vy: b.vy },
+			{
+				excitement,
+				turnState: {
+					direction: b.excitedTurnDirection,
+					framesRemaining: b.excitedTurnFramesRemaining
+				},
+				randomValue: Math.random()
+			}
+		);
+		b.excitedTurnDirection = excitedTurn.nextTurnState.direction;
+		b.excitedTurnFramesRemaining = excitedTurn.nextTurnState.framesRemaining;
+		steerX += excitedTurn.steerX;
+		steerY += excitedTurn.steerY;
 
 		b.vx += steerX; b.vy += steerY;
 		const speed = Math.sqrt(b.vx*b.vx+b.vy*b.vy);
+		const excitedMinSpeed = Math.max(minSpeed, excitedTurn.desiredSpeed * (0.76 + excitement * 0.08));
+		const targetMinSpeed = excitement > 0.03 ? excitedMinSpeed : minSpeed;
 		if (speed > maxSpeed) { b.vx=(b.vx/speed)*maxSpeed; b.vy=(b.vy/speed)*maxSpeed; }
-		else if (speed < minSpeed && speed > 0) { b.vx=(b.vx/speed)*minSpeed; b.vy=(b.vy/speed)*minSpeed; }
+		else if (speed < targetMinSpeed && speed > 0) { b.vx=(b.vx/speed)*targetMinSpeed; b.vy=(b.vy/speed)*targetMinSpeed; }
 		b.x = ((b.x + b.vx) % w + w) % w;
 		b.y = ((b.y + b.vy) % h + h) % h;
 	}
@@ -246,32 +338,34 @@ function loop() {
 	for (const b of boids) drawBoid(b);
 }
 
-self.onmessage = (e) => {
-	const msg = e.data;
-	switch (msg.type) {
-		case 'init':
-			canvas = msg.canvas as OffscreenCanvas;
-			w = msg.w;
-			h = msg.h;
-			canvas.width = w;
-			canvas.height = h;
-			ctx = canvas.getContext('2d');
-			boids = initBoids(w, h);
-			intervalId = setInterval(loop, 1000 / 60);
-			break;
-		case 'resize':
-			w = msg.w;
-			h = msg.h;
-			if (canvas) { canvas.width = w; canvas.height = h; }
-			break;
-		case 'setClientExcitement':
-			setClientExcitement(msg.clientId, msg.value);
-			break;
-		case 'setBoidExcitement':
-			setBoidExcitement(msg.boidId, msg.value);
-			break;
-		case 'stop':
-			if (intervalId !== null) clearInterval(intervalId);
-			break;
-	}
-};
+if (typeof self !== 'undefined') {
+	self.onmessage = (e) => {
+		const msg = e.data;
+		switch (msg.type) {
+			case 'init':
+				canvas = msg.canvas as OffscreenCanvas;
+				w = msg.w;
+				h = msg.h;
+				canvas.width = w;
+				canvas.height = h;
+				ctx = canvas.getContext('2d');
+				boids = initBoids(w, h);
+				intervalId = setInterval(loop, 1000 / 60);
+				break;
+			case 'resize':
+				w = msg.w;
+				h = msg.h;
+				if (canvas) { canvas.width = w; canvas.height = h; }
+				break;
+			case 'setClientExcitement':
+				setClientExcitement(msg.clientId, msg.value);
+				break;
+			case 'setBoidExcitement':
+				setBoidExcitement(msg.boidId, msg.value);
+				break;
+			case 'stop':
+				if (intervalId !== null) clearInterval(intervalId);
+				break;
+		}
+	};
+}
