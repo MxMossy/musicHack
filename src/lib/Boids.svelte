@@ -25,6 +25,14 @@
 
 	let worker: Worker | null = null;
 	let forwardedPeerIds = new Set<string>();
+	
+	// Performance optimization: Track last sent values to deduplicate updates
+	let lastSentExcitement = new Map<string, number>();
+	const EXCITEMENT_CHANGE_THRESHOLD = 0.03; // Only update if changed by >3%
+	
+	// Performance optimization: Throttle effect to prevent excessive worker messages
+	let pendingUpdate = false;
+	let updateScheduled = false;
 
 	onMount(() => {
 		worker = new BoidsWorker();
@@ -64,23 +72,61 @@
 			worker?.terminate();
 			worker = null;
 			forwardedPeerIds.clear();
+			lastSentExcitement.clear();
 		};
 	});
 
-	$effect(() => {
+	// Helper: Process pending peer updates after throttling
+	function processPeerUpdates() {
+		pendingUpdate = false;
+		updateScheduled = false;
+		
 		const currentPeerIds = new Set(Object.keys(peerStore.peers));
 
+		// Release clients that are no longer connected
 		for (const peerId of forwardedPeerIds) {
 			if (!currentPeerIds.has(peerId)) {
 				releaseClient(peerId);
 				forwardedPeerIds.delete(peerId);
+				lastSentExcitement.delete(peerId);
 			}
 		}
 
+		// Add new clients and update excitement (with deduplication)
 		for (const [peerId, peerState] of Object.entries(peerStore.peers)) {
-			ensureClientAssignment(peerId);
-			setClientExcitement(peerId, peerState.energy);
-			forwardedPeerIds.add(peerId);
+			// Only send ensureClientAssignment if client is new
+			if (!forwardedPeerIds.has(peerId)) {
+				ensureClientAssignment(peerId);
+				forwardedPeerIds.add(peerId);
+				lastSentExcitement.set(peerId, peerState.energy);
+				setClientExcitement(peerId, peerState.energy);
+			} else {
+				// Only update excitement if it changed significantly
+				const lastExcitement = lastSentExcitement.get(peerId) ?? -1;
+				if (Math.abs(peerState.energy - lastExcitement) > EXCITEMENT_CHANGE_THRESHOLD) {
+					setClientExcitement(peerId, peerState.energy);
+					lastSentExcitement.set(peerId, peerState.energy);
+				}
+			}
+		}
+	}
+
+	// Throttled effect: Only process updates at most once per frame (~16ms)
+	$effect(() => {
+		// Read reactive dependencies
+		const _peers = peerStore.peers;
+		
+		// Mark that an update is pending
+		pendingUpdate = true;
+		
+		// Schedule the update for the next frame if not already scheduled
+		if (!updateScheduled) {
+			updateScheduled = true;
+			requestAnimationFrame(() => {
+				if (pendingUpdate) {
+					processPeerUpdates();
+				}
+			});
 		}
 	});
 
