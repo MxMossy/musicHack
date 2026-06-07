@@ -15,6 +15,7 @@
 		type Landmark
 	} from '$lib/body-relative';
 	import Boids from '$lib/Boids.svelte';
+	import { peerStore } from '$lib/peerStore.svelte';
 
 	const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 	const POSE_MODEL =
@@ -37,6 +38,12 @@
 	// wrist + fingertips: [0, 4, 8, 12, 16, 20]
 
 	let boidsEnabled = $state(false);
+	const avgExcitement = $derived(
+		(() => {
+			const peers = Object.values(peerStore.peers);
+			return peers.length ? peers.reduce((s, p) => s + p.energy, 0) / peers.length : 0;
+		})()
+	);
 	let videoVisible = $state(true);
 	let stream = $state<MediaStream | null>(null);
 	let error = $state('');
@@ -78,6 +85,8 @@
 	let midiOutput = $state<MIDIOutput | null>(null);
 	let midiChannel = $state(10);
 	let lastMidiSend = 0;
+	let lastInference = 0;
+	const INFERENCE_INTERVAL = 50; // ~20fps
 
 	// MIDI mappings — each entry owns its type, target number, and live value
 	type CcMapping = { name: string; type: 'cc'; number: number; value: number };
@@ -623,6 +632,13 @@
 			return;
 
 		if (videoEl.readyState >= 2) {
+			const now = performance.now();
+			if (now - lastInference < INFERENCE_INTERVAL) {
+				rafId = requestAnimationFrame(runLoop);
+				return;
+			}
+			lastInference = now;
+
 			const w = videoEl.videoWidth;
 			const h = videoEl.videoHeight;
 			if (canvasEl.width !== w) canvasEl.width = w;
@@ -630,7 +646,6 @@
 
 			const ctx = canvasEl.getContext('2d')!;
 			ctx.clearRect(0, 0, w, h);
-			const now = performance.now();
 			const shouldSendMidi = now - lastMidiSend > 33;
 			let sentMidiThisFrame = false;
 			let currentPoseLandmarks: Landmark[] | undefined;
@@ -953,6 +968,11 @@
 {#if boidsEnabled}
 	<Boids class="fixed inset-0 -z-10 bg-[#0a0a0f]" />
 {/if}
+
+<div
+	class="fixed inset-0 -z-10 pointer-events-none"
+	style="background: radial-gradient(ellipse {avgExcitement * 150}% {avgExcitement * 150}% at 50% 100%, rgba(6, 182, 212, {avgExcitement * 0.35}) 0%, transparent 70%)"
+></div>
 
 <div class="flex h-screen overflow-hidden {boidsEnabled ? '' : 'bg-zinc-950'}">
 	<!-- main area -->
