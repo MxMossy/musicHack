@@ -18,7 +18,7 @@ type BoidController = {
 
 const BOID_COUNT = 30;
 const ENABLE_CONTROLLER_COLORS = true;
-const CONTROLLER_BOIDS_PER_PHONE = 1;
+const CONTROLLER_BOIDS_PER_PHONE = 5;
 const MAX_SPEED = 2.5;
 const MIN_SPEED = 0.8;
 const SEP_RADIUS = 30;
@@ -34,9 +34,11 @@ const EXCITABILITY_MIN = 0.45;
 const EXCITABILITY_MAX = 1.8;
 const EXCITEMENT_EASE = 0.08;
 const EXCITE_STEER_BOOST = 0.55;
-const EXCITE_SPEED_BOOST = 0.8;
-const EXCITE_JITTER_FORCE = 0.035;
-const EXCITE_SEPARATION_BOOST = 0.9;
+const EXCITE_SPEED_BOOST = 1.35;
+const EXCITE_JITTER_FORCE = 0.08;
+const EXCITE_SEPARATION_BOOST = 1.8;
+const EXCITE_ALIGNMENT_FADE = 1.2;
+const EXCITE_COHESION_FADE = 1.35;
 const CONTROLLER_TIMEOUT_MS = 3000;
 const DEFAULT_BOID_HUE = 196;
 const CONTROLLER_HUE_MIN_DISTANCE = 24;
@@ -165,6 +167,8 @@ function updateBoids() {
 		const maxSpeed = MAX_SPEED + excitement * EXCITE_SPEED_BOOST;
 		const minSpeed = MIN_SPEED + excitement * EXCITE_SPEED_BOOST * 0.2;
 		const separationWeight = SEP_WEIGHT * (1 + excitement * EXCITE_SEPARATION_BOOST);
+		const alignmentWeight = ALI_WEIGHT * Math.max(0, 1 - excitement * EXCITE_ALIGNMENT_FADE);
+		const cohesionWeight = COH_WEIGHT * Math.max(0, 1 - excitement * EXCITE_COHESION_FADE);
 
 		let sepX = 0, sepY = 0, sepCount = 0;
 		let aliX = 0, aliY = 0, aliCount = 0;
@@ -184,8 +188,8 @@ function updateBoids() {
 
 		let steerX = 0, steerY = 0;
 		if (sepCount > 0) { const m = Math.sqrt(sepX*sepX+sepY*sepY); if (m>0) { steerX+=(sepX/m)*steerForce*separationWeight; steerY+=(sepY/m)*steerForce*separationWeight; } }
-		if (aliCount > 0) { const ax=aliX/aliCount-b.vx, ay=aliY/aliCount-b.vy, m=Math.sqrt(ax*ax+ay*ay); if (m>0) { steerX+=(ax/m)*steerForce*ALI_WEIGHT; steerY+=(ay/m)*steerForce*ALI_WEIGHT; } }
-		if (cohCount > 0) { const cx=cohX/cohCount-b.x, cy=cohY/cohCount-b.y, m=Math.sqrt(cx*cx+cy*cy); if (m>0) { steerX+=(cx/m)*steerForce*COH_WEIGHT; steerY+=(cy/m)*steerForce*COH_WEIGHT; } }
+		if (aliCount > 0 && alignmentWeight > 0) { const ax=aliX/aliCount-b.vx, ay=aliY/aliCount-b.vy, m=Math.sqrt(ax*ax+ay*ay); if (m>0) { steerX+=(ax/m)*steerForce*alignmentWeight; steerY+=(ay/m)*steerForce*alignmentWeight; } }
+		if (cohCount > 0 && cohesionWeight > 0) { const cx=cohX/cohCount-b.x, cy=cohY/cohCount-b.y, m=Math.sqrt(cx*cx+cy*cy); if (m>0) { steerX+=(cx/m)*steerForce*cohesionWeight; steerY+=(cy/m)*steerForce*cohesionWeight; } }
 		if (excitement > 0.03) { steerX += (Math.random()*2-1)*EXCITE_JITTER_FORCE*excitement; steerY += (Math.random()*2-1)*EXCITE_JITTER_FORCE*excitement; }
 
 		b.vx += steerX; b.vy += steerY;
@@ -200,19 +204,28 @@ function updateBoids() {
 function drawBoid(b: Boid) {
 	if (!ctx) return;
 	const excitement = b.excitement;
-	const sizeScale = 1 + excitement * 0.3;
+	const sizeScale = 1 + excitement * 0.75;
+	const fillLightness = 64 + excitement * 12;
+	const strokeLightness = 90 + excitement * 6;
+	const glowAlpha = 0.08 + excitement * 0.24;
 	ctx.save();
 	ctx.translate(b.x, b.y);
 	ctx.rotate(Math.atan2(b.vy, b.vx));
 	ctx.scale(sizeScale, sizeScale);
+	if (excitement > 0.08) {
+		ctx.beginPath();
+		ctx.arc(0, 0, TRI_LENGTH * (0.9 + excitement * 0.8), 0, Math.PI * 2);
+		ctx.fillStyle = `hsla(${b.colorHue}, 100%, ${fillLightness}%, ${glowAlpha})`;
+		ctx.fill();
+	}
 	ctx.beginPath();
 	ctx.moveTo(TRI_LENGTH, 0);
 	ctx.lineTo(0, TRI_HALF_BASE);
 	ctx.lineTo(0, -TRI_HALF_BASE);
 	ctx.closePath();
-	ctx.fillStyle = `hsla(${b.colorHue}, 88%, 64%, ${0.85 + excitement * 0.12})`;
-	ctx.strokeStyle = `hsla(${b.colorHue}, 96%, 90%, ${0.5 + excitement * 0.35})`;
-	ctx.lineWidth = 0.8 + excitement * 0.8;
+	ctx.fillStyle = `hsla(${b.colorHue}, 96%, ${fillLightness}%, ${0.88 + excitement * 0.12})`;
+	ctx.strokeStyle = `hsla(${b.colorHue}, 100%, ${strokeLightness}%, ${0.55 + excitement * 0.4})`;
+	ctx.lineWidth = 0.8 + excitement * 1.6;
 	ctx.fill();
 	ctx.stroke();
 	ctx.restore();
