@@ -8,6 +8,7 @@
 	let status = $state<'connecting' | 'connected' | 'error'>('connecting');
 	let needsPermission = $state(false);
 	let orientation = $state<{ alpha: number | null; beta: number | null; gamma: number | null } | null>(null);
+	let boidHue = $state<number | null>(null);
 	let peer: Peer | null = null;
 	let conn: DataConnection | null = null;
 	let lastSend = 0;
@@ -77,7 +78,7 @@
 		const now = performance.now();
 		if (now - lastSend < 50) return; // ~20fps
 		lastSend = now;
-		conn.send({ alpha: e.alpha, beta: e.beta, gamma: e.gamma });
+		conn.send({ type: 'orientation', alpha: e.alpha, beta: e.beta, gamma: e.gamma });
 	}
 
 	async function requestWakeLock() {
@@ -165,12 +166,25 @@
 			}
 			await syncWakeLock();
 		});
+		conn.on('data', (raw) => {
+			if (
+				raw != null &&
+				typeof raw === 'object' &&
+				'type' in raw &&
+				raw.type === 'peer-visual-state'
+			) {
+				const message = raw as { type: 'peer-visual-state'; boidHue: number | null };
+				boidHue = typeof message.boidHue === 'number' ? message.boidHue : null;
+			}
+		});
 		conn.on('close', () => {
 			conn = null;
+			boidHue = null;
 			status = 'connecting';
 			void syncWakeLock();
 		});
 		conn.on('error', () => {
+			boidHue = null;
 			status = 'error';
 			void syncWakeLock();
 		});
@@ -241,6 +255,17 @@
 		</p>
 	{:else if status === 'connected'}
 		<p class="font-mono text-[10px] tracking-widest text-green-500 uppercase">Connected</p>
+		{#if boidHue != null}
+			<div class="mt-1 flex items-center gap-2">
+				<div
+					class="h-2.5 w-2.5 rounded-full shadow-[0_0_12px_rgba(255,255,255,0.18)]"
+					style={`background-color: hsl(${boidHue} 96% 64%)`}
+				></div>
+				<p class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase">
+					Your boid
+				</p>
+			</div>
+		{/if}
 		{#if needsPermission}
 			<button
 				onclick={requestPermission}

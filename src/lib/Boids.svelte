@@ -20,6 +20,15 @@
 
 	onMount(() => {
 		worker = new BoidsWorker();
+		worker.onmessage = (event: MessageEvent) => {
+			const message = event.data;
+			if (message?.type === 'controllerVisualState' && typeof message.clientId === 'string') {
+				peerStore.setBoidHue(
+					message.clientId,
+					typeof message.boidHue === 'number' ? message.boidHue : null
+				);
+			}
+		};
 
 		const offscreen = canvasEl!.transferControlToOffscreen();
 		worker.postMessage(

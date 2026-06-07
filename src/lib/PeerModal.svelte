@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import QRCode from 'qrcode';
-	import Peer from 'peerjs';
+	import Peer, { type DataConnection } from 'peerjs';
 	import { peerStore, type Orientation } from './peerStore.svelte.ts';
 	import { getIceServers } from './iceServers.ts';
 
@@ -20,6 +20,8 @@
 	let connectedPeers = $state(0);
 	let peer: Peer | null = null;
 	let ws: WebSocket | null = null;
+	const connections = new Map<string, DataConnection>();
+	const lastSentBoidHues = new Map<string, number | null>();
 
 	function fmt(n: number | null): string {
 		return n == null ? '--' : n.toFixed(1).padStart(7);
@@ -41,11 +43,32 @@
 		peer = new Peer(joinCode, iceServers.length ? { config: { iceServers } } : {});
 		peer.on('connection', (conn) => {
 			connectedPeers++;
+			connections.set(conn.peer, conn);
+			peerStore.ensurePeer(conn.peer);
 			conn.on('data', (raw) => {
-				peerStore.update(conn.peer, raw as Orientation);
+				if (
+					raw != null &&
+					typeof raw === 'object' &&
+					'type' in raw &&
+					raw.type === 'orientation'
+				) {
+					const message = raw as {
+						type: 'orientation';
+						alpha: number | null;
+						beta: number | null;
+						gamma: number | null;
+					};
+					peerStore.update(conn.peer, {
+						alpha: message.alpha,
+						beta: message.beta,
+						gamma: message.gamma
+					} as Orientation);
+				}
 			});
 			conn.on('close', () => {
 				connectedPeers = Math.max(0, connectedPeers - 1);
+				connections.delete(conn.peer);
+				lastSentBoidHues.delete(conn.peer);
 				peerStore.remove(conn.peer);
 			});
 		});
@@ -75,11 +98,23 @@
 		return () => clearInterval(pollId);
 	});
 
+	$effect(() => {
+		for (const [peerId, conn] of connections.entries()) {
+			if (!conn.open) continue;
+			const boidHue = peerStore.peers[peerId]?.boidHue ?? null;
+			if (lastSentBoidHues.get(peerId) === boidHue) continue;
+			conn.send({ type: 'peer-visual-state', boidHue });
+			lastSentBoidHues.set(peerId, boidHue);
+		}
+	});
+
 	onDestroy(() => {
 		ws?.close();
 		ws = null;
 		peer?.destroy();
 		peer = null;
+		connections.clear();
+		lastSentBoidHues.clear();
 		peerStore.clear();
 	});
 
