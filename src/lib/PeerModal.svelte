@@ -13,10 +13,13 @@
 		).join('');
 	}
 
+	const BACKEND_URL = 'ws://localhost:8765';
+
 	const joinCode = generateCode();
 	let qrDataUrl = $state('');
 	let connectedPeers = $state(0);
 	let peer: Peer | null = null;
+	let ws: WebSocket | null = null;
 
 	function fmt(n: number | null): string {
 		return n == null ? '--' : n.toFixed(1).padStart(7);
@@ -30,6 +33,8 @@
 			color: { dark: '#ffffff', light: '#09090b' }
 		});
 
+		ws = new WebSocket(BACKEND_URL);
+
 		const iceServers = await getIceServers();
 		peer = new Peer(joinCode, iceServers.length ? { config: { iceServers } } : {});
 		peer.on('connection', (conn) => {
@@ -37,6 +42,9 @@
 			conn.on('data', (raw) => {
 				const data = raw as Orientation;
 				peerStore.update(conn.peer, data);
+				if (ws?.readyState === WebSocket.OPEN) {
+					ws.send(JSON.stringify({ peerId: conn.peer, ...data }));
+				}
 			});
 			conn.on('close', () => {
 				connectedPeers = Math.max(0, connectedPeers - 1);
@@ -46,6 +54,8 @@
 	}
 
 	function teardown() {
+		ws?.close();
+		ws = null;
 		peer?.destroy();
 		peer = null;
 		connectedPeers = 0;
