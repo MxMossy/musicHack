@@ -68,8 +68,9 @@
 			const avgExcitement = peers.length
 				? peers.reduce((sum, p) => sum + p.energy, 0) / peers.length
 				: 0;
-			ws.send(JSON.stringify({ excitement: avgExcitement }));
-			console.log('[ws] excitement:', avgExcitement);
+			const msg = { type: 'energy', timestamp: Date.now(), energy: avgExcitement };
+			ws.send(JSON.stringify(msg));
+			console.log('[ws] energy:', avgExcitement);
 		}, 5000);
 		return () => clearInterval(pollId);
 	});
