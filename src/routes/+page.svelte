@@ -70,6 +70,10 @@
 	type CcMapping   = { name: string; type: 'cc';   number: number; value: number };
 	type NoteMapping = { name: string; type: 'note'; number: number; value: boolean };
 	type MidiMapping = CcMapping | NoteMapping;
+	type ThresholdTriggerState = {
+		armed: boolean;
+		lastTriggerTime: number;
+	};
 
 	let midiMappings = $state<MidiMapping[]>([
 		{ name: 'Left Hand X', type: 'cc', number: 1, value: 0 },
@@ -84,7 +88,11 @@
 		{ name: 'Right Hand Energy', type: 'cc', number: 10, value: 0 },
 		{ name: 'Left Arm', type: 'note', number: 61, value: false },
 		{ name: 'Right Arm', type: 'note', number: 60, value: false },
+		{ name: 'Left Energy Burst', type: 'note', number: 62, value: false },
+		{ name: 'Right Energy Burst', type: 'note', number: 63, value: false },
 	]);
+	let leftEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
+	let rightEnergyBurstState: ThresholdTriggerState = { armed: true, lastTriggerTime: 0 };
 
 	async function initMidi() {
 		try {
@@ -112,6 +120,44 @@
 	function sendNote(mapping: NoteMapping, on: boolean) {
 		if (!midiOutput) return;
 		midiOutput.send([(on ? 0x90 : 0x80) | (midiChannel - 1), mapping.number, on ? 100 : 0]);
+	}
+
+	function findNoteMapping(name: string): NoteMapping | undefined {
+		const mapping = midiMappings.find((entry) => entry.name === name);
+		return mapping?.type === 'note' ? mapping : undefined;
+	}
+
+	function pulseNote(mapping: NoteMapping, durationMs = 100) {
+		mapping.value = true;
+		sendNote(mapping, true);
+		window.setTimeout(() => {
+			mapping.value = false;
+			sendNote(mapping, false);
+		}, durationMs);
+	}
+
+	function updateThresholdNoteTrigger(
+		value: number,
+		state: ThresholdTriggerState,
+		mapping: NoteMapping | undefined,
+		now: number,
+		threshold = 0.7,
+		resetThreshold = 0.35,
+		cooldownMs = 450
+	) {
+		if (!mapping) return;
+
+		if (value <= resetThreshold) {
+			state.armed = true;
+			return;
+		}
+
+		if (!state.armed || value < threshold) return;
+		if (now - state.lastTriggerTime < cooldownMs) return;
+
+		pulseNote(mapping);
+		state.armed = false;
+		state.lastTriggerTime = now;
 	}
 
 	function isLandmarkOnScreen(landmark: Landmark | undefined, margin = 0): boolean {
@@ -283,6 +329,18 @@
 		previousRightPoseWristPoints.clear();
 		if (rightArmRaised) sendNote(midiMappings[11] as NoteMapping, false);
 		if (leftArmRaised) sendNote(midiMappings[10] as NoteMapping, false);
+		const leftEnergyBurstMapping = findNoteMapping('Left Energy Burst');
+		const rightEnergyBurstMapping = findNoteMapping('Right Energy Burst');
+		leftEnergyBurstState = { armed: true, lastTriggerTime: 0 };
+		rightEnergyBurstState = { armed: true, lastTriggerTime: 0 };
+		if (leftEnergyBurstMapping?.value) {
+			leftEnergyBurstMapping.value = false;
+			sendNote(leftEnergyBurstMapping, false);
+		}
+		if (rightEnergyBurstMapping?.value) {
+			rightEnergyBurstMapping.value = false;
+			sendNote(rightEnergyBurstMapping, false);
+		}
 		rightArmRaised = false;
 		prevRightArmRaised = false;
 		leftArmRaised = false;
@@ -303,6 +361,8 @@
 		midiMappings[9].value = 0;
 		midiMappings[10].value = false;
 		midiMappings[11].value = false;
+		midiMappings[12].value = false;
+		midiMappings[13].value = false;
 		if (canvasEl) canvasEl.getContext('2d')?.clearRect(0, 0, canvasEl.width, canvasEl.height);
 	}
 
@@ -653,6 +713,19 @@
 					}
 				}
 			}
+
+			updateThresholdNoteTrigger(
+				leftHandEnergy,
+				leftEnergyBurstState,
+				findNoteMapping('Left Energy Burst'),
+				now
+			);
+			updateThresholdNoteTrigger(
+				rightHandEnergy,
+				rightEnergyBurstState,
+				findNoteMapping('Right Energy Burst'),
+				now
+			);
 
 			if (sentMidiThisFrame) lastMidiSend = now;
 
