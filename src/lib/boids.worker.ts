@@ -4,6 +4,7 @@ type Boid = {
 	y: number;
 	vx: number;
 	vy: number;
+	colorHue: number;
 	excitability: number;
 	excitement: number;
 	targetExcitement: number;
@@ -11,11 +12,13 @@ type Boid = {
 
 type BoidController = {
 	clientId: string;
-	boidId: string;
+	boidIds: string[];
 	lastSeen: number;
 };
 
 const BOID_COUNT = 50;
+const ENABLE_CONTROLLER_COLORS = true;
+const CONTROLLER_BOIDS_PER_PHONE = 1;
 const MAX_SPEED = 2.5;
 const MIN_SPEED = 0.8;
 const SEP_RADIUS = 30;
@@ -35,6 +38,8 @@ const EXCITE_SPEED_BOOST = 0.8;
 const EXCITE_JITTER_FORCE = 0.035;
 const EXCITE_SEPARATION_BOOST = 0.9;
 const CONTROLLER_TIMEOUT_MS = 3000;
+const DEFAULT_BOID_HUE = 196;
+const CONTROLLER_HUE_MIN_DISTANCE = 24;
 
 let canvas: OffscreenCanvas | null = null;
 let ctx: OffscreenCanvasRenderingContext2D | null = null;
@@ -46,6 +51,44 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 
 function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
 
+function circularHueDistance(a: number, b: number) {
+	const delta = Math.abs(a - b);
+	return Math.min(delta, 360 - delta);
+}
+
+function getUsedControllerHues(excludeBoidId?: string): number[] {
+	return Array.from(controllers.values())
+		.flatMap((controller) => controller.boidIds)
+		.filter((boidId) => boidId !== excludeBoidId)
+		.map((boidId) => boids.find((candidate) => candidate.id === boidId)?.colorHue)
+		.filter((hue): hue is number => hue != null && hue !== DEFAULT_BOID_HUE);
+}
+
+function createUniqueControllerHue(excludeBoidId?: string): number {
+	const usedHues = getUsedControllerHues(excludeBoidId);
+	for (let attempt = 0; attempt < 24; attempt += 1) {
+		const hue = Math.floor(Math.random() * 360);
+		if (
+			usedHues.every(
+				(usedHue) => circularHueDistance(usedHue, hue) >= CONTROLLER_HUE_MIN_DISTANCE
+			)
+		) {
+			return hue;
+		}
+	}
+
+	return Math.floor(Math.random() * 360);
+}
+
+function applyControllerColor(boid: Boid) {
+	if (!ENABLE_CONTROLLER_COLORS) return;
+	boid.colorHue = createUniqueControllerHue(boid.id);
+}
+
+function resetBoidColor(boid: Boid) {
+	boid.colorHue = DEFAULT_BOID_HUE;
+}
+
 function initBoids(width: number, height: number): Boid[] {
 	return Array.from({ length: BOID_COUNT }, (_, i) => {
 		const angle = Math.random() * Math.PI * 2;
@@ -56,6 +99,7 @@ function initBoids(width: number, height: number): Boid[] {
 			y: Math.random() * height,
 			vx: Math.cos(angle) * speed,
 			vy: Math.sin(angle) * speed,
+			colorHue: DEFAULT_BOID_HUE,
 			excitability: EXCITABILITY_MIN + Math.random() * (EXCITABILITY_MAX - EXCITABILITY_MIN),
 			excitement: 0,
 			targetExcitement: 0
@@ -68,29 +112,41 @@ function setBoidExcitement(boidId: string, value: number) {
 	if (boid) boid.targetExcitement = clamp01(value);
 }
 
-function assignClientToBoid(clientId: string): string | undefined {
+function assignClientToBoids(clientId: string): string[] {
 	const existing = controllers.get(clientId);
-	if (existing) return existing.boidId;
-	const claimed = new Set(Array.from(controllers.values(), (c) => c.boidId));
-	const free = boids.find((b) => !claimed.has(b.id));
-	if (!free) return undefined;
-	controllers.set(clientId, { clientId, boidId: free.id, lastSeen: performance.now() });
-	return free.id;
+	if (existing) return existing.boidIds;
+	const claimed = new Set(Array.from(controllers.values()).flatMap((controller) => controller.boidIds));
+	const boidIds = boids
+		.filter((boid) => !claimed.has(boid.id))
+		.slice(0, Math.max(0, CONTROLLER_BOIDS_PER_PHONE))
+		.map((boid) => {
+			applyControllerColor(boid);
+			return boid.id;
+		});
+	if (boidIds.length === 0) return [];
+	controllers.set(clientId, { clientId, boidIds, lastSeen: performance.now() });
+	return boidIds;
 }
 
 function releaseClientBoid(clientId: string) {
 	const controller = controllers.get(clientId);
 	if (!controller) return;
-	setBoidExcitement(controller.boidId, 0);
+	for (const boidId of controller.boidIds) {
+		setBoidExcitement(boidId, 0);
+		const boid = boids.find((candidate) => candidate.id === boidId);
+		if (boid) resetBoidColor(boid);
+	}
 	controllers.delete(clientId);
 }
 
 function setClientExcitement(clientId: string, value: number) {
-	const boidId = assignClientToBoid(clientId);
-	if (!boidId) return;
+	const boidIds = assignClientToBoids(clientId);
+	if (boidIds.length === 0) return;
 	const controller = controllers.get(clientId);
 	if (controller) controller.lastSeen = performance.now();
-	setBoidExcitement(boidId, value);
+	for (const boidId of boidIds) {
+		setBoidExcitement(boidId, value);
+	}
 }
 
 function releaseStaleControllers(now: number) {
@@ -154,8 +210,8 @@ function drawBoid(b: Boid) {
 	ctx.lineTo(0, TRI_HALF_BASE);
 	ctx.lineTo(0, -TRI_HALF_BASE);
 	ctx.closePath();
-	ctx.fillStyle = `rgba(99, 210, 255, ${0.85 + excitement * 0.12})`;
-	ctx.strokeStyle = `rgba(210, 248, 255, ${0.5 + excitement * 0.35})`;
+	ctx.fillStyle = `hsla(${b.colorHue}, 88%, 64%, ${0.85 + excitement * 0.12})`;
+	ctx.strokeStyle = `hsla(${b.colorHue}, 96%, 90%, ${0.5 + excitement * 0.35})`;
 	ctx.lineWidth = 0.8 + excitement * 0.8;
 	ctx.fill();
 	ctx.stroke();
